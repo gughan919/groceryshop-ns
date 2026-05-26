@@ -1,0 +1,6 @@
+{
+  "name": "Nammashop",
+  "description": "Nammashop is a premium quick-commerce grocery platform featuring instant delivery, integrated shopping cart, real-time stock-deducting inventory control, and a full-featured admin management portal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

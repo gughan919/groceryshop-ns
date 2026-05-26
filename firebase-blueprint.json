@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Profile data for Nammashop users, defining public profiles and specific administrative roles.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "customer"] },
+        "phone": { "type": "string" },
+        "avatar": { "type": "string" },
+        "isBanned": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "email", "name", "role", "createdAt"]
+    },
+    "Address": {
+      "title": "Address",
+      "description": "Customer delivery locations and contact coordinates.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "fullName": { "type": "string" },
+        "street": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "pincode": { "type": "string" },
+        "phone": { "type": "string" }
+      },
+      "required": ["id", "label", "fullName", "street", "city", "state", "pincode", "phone"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Groceries currently listed in the store catalog with dynamic inventory stock counters.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "discount": { "type": "number" },
+        "stock": { "type": "number" },
+        "image": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "brand": { "type": "string" },
+        "unit": { "type": "string" },
+        "rating": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "isFeatured": { "type": "boolean" }
+      },
+      "required": ["id", "name", "slug", "price", "discount", "stock", "image", "categoryId", "unit"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "E-commerce grocery parent and child category nodes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "icon": { "type": "string" },
+        "banner": { "type": "string" },
+        "parentId": { "type": "string" }
+      },
+      "required": ["id", "name", "slug", "icon"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Authorized customer orders encompassing item records and current dispatch state tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "couponCode": { "type": "string" },
+        "tax": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["Pending", "Packed", "Shipped", "Out for delivery", "Delivered", "Cancelled"] },
+        "paymentMethod": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "address": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "timeline": { "type": "array" }
+      },
+      "required": ["id", "userId", "userEmail", "userName", "items", "subtotal", "discount", "tax", "deliveryFee", "total", "status", "paymentMethod", "paymentStatus", "address", "createdAt", "timeline"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Customer comments and ratings linked directly to active products.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userAvatar": { "type": "string" },
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "productId", "userName", "rating", "comment", "date"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Nammashop discount coupons valid for cart checkouts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "type": { "type": "string", "enum": ["percent", "fixed"] },
+        "value": { "type": "number" },
+        "expiryDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "usageLimit": { "type": "number" },
+        "usageCount": { "type": "number" }
+      },
+      "required": ["id", "code", "type", "value", "expiryDate", "active", "usageLimit", "usageCount"]
+    },
+    "DashboardBanner": {
+      "title": "DashboardBanner",
+      "description": "Promotional banners displayed dynamically in the slider module.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "image": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "link": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "image", "title", "active"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "User profiles indexed by authentication UID."
+    },
+    "users/{userId}/addresses": {
+      "schema": "Address",
+      "description": "Addresses belonging to a given client."
+    },
+    "categories": {
+      "schema": "Category",
+      "description": "Predefined product categories."
+    },
+    "products": {
+      "schema": "Product",
+      "description": "Items loaded in the catalog."
+    },
+    "products/{productId}/reviews": {
+      "schema": "Review",
+      "description": "Product reviews and customer ratings."
+    },
+    "orders": {
+      "schema": "Order",
+      "description": "Placed orders indexed for administrative action."
+    },
+    "coupons": {
+      "schema": "Coupon",
+      "description": "Platform-wide discount coupons."
+    },
+    "banners": {
+      "schema": "DashboardBanner",
+      "description": "Home carousel marketing banners."
+    }
+  }
+}
