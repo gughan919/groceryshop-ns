@@ -147,6 +147,10 @@ export default function AdminPortal({
   });
 
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [adminProductSearch, setAdminProductSearch] = useState('');
+  const [adminStockFilter, setAdminStockFilter] = useState<'all' | 'in' | 'low' | 'out'>('all');
+  const [adminCategoryFilter, setAdminCategoryFilter] = useState('all');
+  const [adminVisibleCount, setAdminVisibleCount] = useState(8);
 
   useEffect(() => {
     fetchAnalytics();
@@ -154,6 +158,17 @@ export default function AdminPortal({
       fetchUsers();
     }
   }, [activeTab]);
+
+  const filteredAdminProducts = products.filter((p) => {
+    const matchesSearch = p.name.toLowerCase().includes(adminProductSearch.toLowerCase()) || (p.brand || '').toLowerCase().includes(adminProductSearch.toLowerCase());
+    const matchesCategory = adminCategoryFilter === 'all' || p.categoryId === adminCategoryFilter;
+    const matchesStock =
+      adminStockFilter === 'all' ||
+      (adminStockFilter === 'in' && p.stock > 10) ||
+      (adminStockFilter === 'low' && p.stock > 0 && p.stock <= 10) ||
+      (adminStockFilter === 'out' && p.stock === 0);
+    return matchesSearch && matchesCategory && matchesStock;
+  });
 
   const fetchAnalytics = async () => {
     setIsLoadingAnalytics(true);
@@ -929,80 +944,40 @@ export default function AdminPortal({
               </form>
             )}
 
-            {/* Catalog list in Stock reduction control grid */}
-            <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-gray-500 border-collapse">
-                  <thead className="text-[10px] text-gray-400 font-bold uppercase bg-slate-50 border-b border-slate-100">
-                    <tr>
-                      <th className="px-5 py-3.5">Grocery details</th>
-                      <th className="px-4 py-3.5">Category</th>
-                      <th className="px-4 py-3.5">Unit size</th>
-                      <th className="px-4 py-3.5">Base Price</th>
-                      <th className="px-4 py-3.5">Discount</th>
-                      <th className="px-4 py-3.5">Stock state</th>
-                      <th className="px-5 py-3.5 text-right font-bold">Shelves actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {products.map(p => (
-                      <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="px-5 py-3.5 flex items-center gap-3">
-                          <img
-                            src={p.image}
-                            alt={p.name}
-                            className="h-10 w-10 object-cover rounded-xl border border-gray-100 shadow-3xs"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div>
-                            <span className="text-gray-800 font-bold block">{p.name}</span>
-                            <span className="text-[10px] text-gray-400 font-mono">id: {p.id}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3.5 text-gray-600 font-medium whitespace-nowrap">
-                          {categories.find(c => c.id === p.categoryId)?.name || 'Unknown'}
-                        </td>
-                        <td className="px-4 py-3.5 font-mono text-gray-500 whitespace-nowrap">{p.unit}</td>
-                        <td className="px-4 py-3.5 font-bold text-gray-800 whitespace-nowrap">£{Number(p.price).toFixed(2)}</td>
-                        <td className="px-4 py-3.5 whitespace-nowrap">
-                          {p.discount > 0 ? (
-                            <span className="bg-orange-50 text-orange-600 border border-orange-100 px-2 py-0.5 rounded-md font-bold text-[10px]">{p.discount}% OFF</span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3.5 whitespace-nowrap">
-                          {p.stock === 0 ? (
-                            <span className="bg-rose-50 border border-rose-100 text-rose-600 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">OUT OF STOCK</span>
-                          ) : p.stock < 10 ? (
-                            <span className="bg-amber-50 border border-amber-100 text-amber-600 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">WARN: {p.stock} LEFT</span>
-                          ) : (
-                            <span className="bg-emerald-50 border border-emerald-100 text-emerald-600 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">{p.stock} IN STOCK</span>
-                          )}
-                        </td>
-                        <td className="px-5 py-3.5 text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => selectProductForEdit(p)}
-                              className="p-1.5 text-blue-500 hover:bg-blue-50 border border-transparent hover:border-blue-100 rounded-lg transition-all"
-                              title="Edit shelf properties"
-                            >
-                              <Edit2 size={13} />
-                            </button>
-                            <button
-                              onClick={() => deleteProduct(p.id)}
-                              className="p-1.5 text-rose-500 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-lg transition-all"
-                              title="Delete catalog index"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="space-y-3 rounded-2xl border border-gray-100 bg-white p-4">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <input value={adminProductSearch} onChange={(e) => setAdminProductSearch(e.target.value)} placeholder="Search product or brand..." className="rounded-xl border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500" />
+                <select value={adminCategoryFilter} onChange={(e) => setAdminCategoryFilter(e.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500">
+                  <option value="all">All categories</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <select value={adminStockFilter} onChange={(e) => setAdminStockFilter(e.target.value as any)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500">
+                  <option value="all">All stock</option><option value="in">In stock</option><option value="low">Low stock</option><option value="out">Out of stock</option>
+                </select>
               </div>
+              <div className="flex gap-3 overflow-x-auto pb-2">
+                {filteredAdminProducts.slice(0, adminVisibleCount).map((p) => (
+                  <div key={p.id} className="min-w-[230px] max-w-[230px] rounded-2xl border border-slate-200 bg-white p-3">
+                    <img src={p.image} alt={p.name} className="h-24 w-full rounded-xl object-cover" referrerPolicy="no-referrer" />
+                    <p className="mt-2 line-clamp-2 text-xs font-bold text-slate-900">{p.name}</p>
+                    <p className="text-[10px] text-slate-500">{categories.find((c) => c.id === p.categoryId)?.name || 'Unknown'} • {p.unit}</p>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-sm font-extrabold text-slate-900">£{Number(p.price).toFixed(2)}</span>
+                      <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-600">{p.discount}% off</span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-slate-600">Stock: {p.stock}</span>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => selectProductForEdit(p)} className="rounded-lg border border-blue-100 p-1.5 text-blue-600"><Edit2 size={12} /></button>
+                        <button onClick={() => deleteProduct(p.id)} className="rounded-lg border border-rose-100 p-1.5 text-rose-600"><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {filteredAdminProducts.length > adminVisibleCount && (
+                <button onClick={() => setAdminVisibleCount((v) => v + 8)} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">Load More</button>
+              )}
             </div>
           </div>
         )}

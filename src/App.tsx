@@ -63,7 +63,7 @@ import {
   setPersistence,
   browserLocalPersistence
 } from 'firebase/auth';
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
 import { generateAndUploadInvoice } from './utils/invoice';
 
 declare global {
@@ -73,6 +73,7 @@ declare global {
 }
 
 const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
+const HOMEPAGE_PRODUCTS_LIMIT = 64;
 
 function isAdminUser(user: User | null) {
   const email = user?.email?.toLowerCase().trim();
@@ -174,6 +175,7 @@ export default function App() {
   const [sortOption, setSortOption] = useState<string>('featured');
   const [brandFilter, setBrandFilter] = useState<string>('');
   const [onlyInStock, setOnlyInStock] = useState<boolean>(false);
+  const [railVisibleCounts, setRailVisibleCounts] = useState<Record<string, number>>({});
 
   // Local/Session Cart persistent states
   const [cart, setCart] = useState<{ productId: string, quantity: number }[]>(() => {
@@ -273,12 +275,6 @@ export default function App() {
   });
   const [deliverySlot, setDeliverySlot] = useState<'express' | 'evening' | 'scheduled'>('express');
   const categoryMap = new Map(categories.map((category) => [category.id, category.name]));
-  const groupedProducts = products.reduce<Record<string, Product[]>>((acc, product) => {
-    const key = product.categoryId || 'uncategorized';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(product);
-    return acc;
-  }, {});
   const whatsappSupportNumber = '447700900123';
   const activeBanner = banners[bannerIndex];
   const recentlyViewedProducts = recentlyViewedIds
@@ -308,6 +304,15 @@ export default function App() {
     ...category,
     accent: accentGradients[index % accentGradients.length]
   }));
+  const dailyEssentialsProducts = products
+    .filter((product) => product.stock > 0)
+    .sort((a, b) => ((b.ratingCount || 0) + b.rating) - ((a.ratingCount || 0) + a.rating))
+    .slice(0, 8);
+  const freshPicksProducts = products
+    .filter((product) => product.stock > 0 && product.rating >= 4)
+    .sort((a, b) => b.stock - a.stock)
+    .slice(0, 8);
+  const weeklyPopularProducts = [...bestSellerProducts].slice(0, 8);
 
   useEffect(() => {
     localStorage.setItem('nammashop_recently_viewed', JSON.stringify(recentlyViewedIds));
@@ -549,7 +554,8 @@ export default function App() {
     let unsubCoupons: () => void;
 
     try {
-      unsubProducts = onSnapshot(collection(firestoreDb, 'products'), (snapshot) => {
+      const productsRef = query(collection(firestoreDb, 'products'), limit(HOMEPAGE_PRODUCTS_LIMIT));
+      unsubProducts = onSnapshot(productsRef, (snapshot) => {
         const prodList: Product[] = [];
         snapshot.forEach((doc) => {
           prodList.push({ id: doc.id, ...doc.data() } as Product);
@@ -712,6 +718,7 @@ export default function App() {
       if (sortOption) prodParams.append('sort', sortOption);
       if (onlyInStock) prodParams.append('availableOnly', 'true');
 
+      prodParams.append('limit', String(HOMEPAGE_PRODUCTS_LIMIT));
       const prodResp = await fetch(`/api/products?${prodParams.toString()}`);
       if (prodResp.ok) setProducts(await prodResp.json());
 
@@ -2666,17 +2673,25 @@ export default function App() {
                   <span>In stock only</span>
                 </label>
               </div>
-              <span className="text-[10px] text-gray-400 font-mono tracking-wider uppercase">Showing <strong>{products.length}</strong> products</span>
+              <span className="text-[10px] text-gray-400 font-mono tracking-wider uppercase">Compact mode: <strong>{Math.min(products.length, HOMEPAGE_PRODUCTS_LIMIT)}</strong> loaded</span>
             </div>
 
             <section className="space-y-8">
               {[
-                { title: 'Featured this week', subtitle: 'Hand-picked premium staples and fresh arrivals.', items: featuredProducts.length > 0 ? featuredProducts : products.slice(0, 8) },
+                { title: 'Best Sellers', subtitle: 'Most purchased and highest confidence picks.', items: bestSellerProducts },
+                { title: 'Daily Essentials', subtitle: 'Fast-repeat staples for everyday grocery runs.', items: dailyEssentialsProducts },
+                { title: 'Trending Products', subtitle: 'What shoppers are adding right now.', items: trendingProducts },
+                { title: 'Recommended For You', subtitle: wishlist.length > 0 ? 'Personalized from your activity.' : 'Curated starter recommendations.', items: personalizedProducts },
+                { title: 'Fresh Picks', subtitle: 'High-rated in-stock produce and fresh categories.', items: freshPicksProducts },
+                { title: 'Weekly Popular', subtitle: 'Top movers from this week.', items: weeklyPopularProducts },
+                { title: 'Seasonal Offers', subtitle: 'Discount-led limited-time grocery deals.', items: flashSaleProducts },
                 { title: 'Best sellers', subtitle: 'Most-loved items based on ratings and repeat buying signals.', items: bestSellerProducts },
-                { title: 'Trending now', subtitle: 'Popular picks shoppers are adding right now.', items: trendingProducts },
-                { title: 'Just for you', subtitle: wishlist.length > 0 ? 'Inspired by your wishlist and saved items.' : 'Starter recommendations for your next grocery run.', items: personalizedProducts },
                 ...(recentlyViewedProducts.length > 0 ? [{ title: 'Recently viewed', subtitle: 'Pick up where you left off.', items: recentlyViewedProducts.slice(0, 8) }] : [])
-              ].map((rail) => (
+              ].filter((rail, idx, arr) => arr.findIndex((r) => r.title === rail.title) === idx).map((rail) => {
+                const railKey = rail.title.toLowerCase().replace(/\s+/g, '-');
+                const visibleCount = railVisibleCounts[railKey] || 8;
+                const visibleItems = rail.items.slice(0, visibleCount);
+                return (
                 <section key={rail.title} className="space-y-4">
                   <div className="flex items-end justify-between gap-3">
                     <div>
@@ -2685,8 +2700,8 @@ export default function App() {
                       <p className="text-sm text-slate-500">{rail.subtitle}</p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                    {rail.items.map((p) => {
+                  <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory no-scrollbar">
+                    {visibleItems.map((p) => {
                       const hasDiscount = p.discount > 0;
                       const finalUnitPrice = p.price * (1 - p.discount / 100);
                       const isSavedInWishlist = wishlist.includes(p.id);
@@ -2695,7 +2710,7 @@ export default function App() {
                       return (
                         <article
                           key={`${rail.title}-${p.id}`}
-                          className="group rounded-[1.8rem] border border-white/80 bg-[rgba(255,255,255,0.95)] p-3 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.45)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_-30px_rgba(15,23,42,0.35)]"
+                          className="group snap-start min-w-[170px] max-w-[170px] sm:min-w-[200px] sm:max-w-[200px] rounded-[1.4rem] border border-white/80 bg-[rgba(255,255,255,0.95)] p-2.5 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.45)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_22px_60px_-30px_rgba(15,23,42,0.35)]"
                         >
                           <div className="relative">
                             {hasDiscount && (
@@ -2771,8 +2786,16 @@ export default function App() {
                       );
                     })}
                   </div>
+                  {rail.items.length > visibleCount && (
+                    <button
+                      onClick={() => setRailVisibleCounts((prev) => ({ ...prev, [railKey]: visibleCount + 4 }))}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                    >
+                      View More
+                    </button>
+                  )}
                 </section>
-              ))}
+              )})}
             </section>
 
             {products.length === 0 ? (
@@ -2781,122 +2804,7 @@ export default function App() {
                 <h4 className="font-sans font-extrabold text-slate-800 text-sm">No matches found</h4>
                 <p className="text-slate-400 text-xs">Try another category, search term, or reset the filters.</p>
               </div>
-            ) : (
-              <div className="space-y-7">
-                {Object.entries(groupedProducts).map(([categoryId, categoryProducts]) => (
-                  <section
-                    key={categoryId}
-                    className="rounded-[2rem] border border-slate-200/70 bg-gradient-to-br from-white via-white to-red-50 p-4 sm:p-5 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.16)]"
-                  >
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-[#ff2d2d]">Shelf collection</p>
-                        <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">
-                          {categoryMap.get(categoryId) || 'Fresh Picks'}
-                        </h3>
-                        <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">
-                          {categoryProducts.length} item{categoryProducts.length > 1 ? 's' : ''} in this section
-                        </p>
-                      </div>
-                      <span className="rounded-full bg-white/90 border border-red-200 text-[#ff2d2d] text-[10px] font-bold px-2.5 py-1">
-                        Curated shelf
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
-                      {categoryProducts.map((p) => {
-                        const hasDiscount = p.discount > 0;
-                        const finalUnitPrice = p.price * (1 - p.discount / 100);
-                        const isSavedInWishlist = wishlist.includes(p.id);
-                        const cartItem = cart.find((c) => c.productId === p.id);
-
-                        return (
-                          <div
-                            key={p.id}
-                            className="group bg-white/95 border border-white/80 rounded-3xl p-3 sm:p-4.5 flex flex-col justify-between shadow-3xs hover:shadow-xs transition-all relative overflow-hidden h-full"
-                          >
-                            {hasDiscount && (
-                              <div className="absolute top-3.5 left-3.5 bg-orange-600 text-white font-bold text-[9px] px-2 py-0.5 rounded-full z-15 shadow-3xs uppercase tracking-wider">
-                                {p.discount}% OFF
-                              </div>
-                            )}
-                            <button
-                              onClick={() => toggleWishlist(p.id)}
-                              className={`absolute top-3 right-3 z-15 p-1.5 rounded-full backdrop-blur-md cursor-pointer transition-all ${
-                                isSavedInWishlist ? 'bg-rose-50 text-rose-500' : 'bg-slate-50 text-slate-400 hover:text-slate-600'
-                              }`}
-                            >
-                              <Heart size={13} className={isSavedInWishlist ? 'fill-current' : ''} />
-                            </button>
-                            <div
-                              onClick={() => openProductOverlay(p)}
-                              className="cursor-pointer relative overflow-hidden rounded-2xl w-full h-[120px] sm:h-[150px] aspect-video flex items-center justify-center bg-gray-50 shrink-0"
-                            >
-                              <img
-                                src={p.image}
-                                alt={p.name}
-                                className="w-full h-full object-cover group-hover:scale-104 transition-all duration-300"
-                                referrerPolicy="no-referrer"
-                              />
-                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 flex items-center justify-center transition-all">
-                                <Eye className="text-white opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 transition-all drop-shadow-md" size={18} />
-                              </div>
-                            </div>
-                            <div className="mt-3.5 flex-1">
-                              <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest">{p.brand || 'Namma organic'}</span>
-                              <h4
-                                onClick={() => openProductOverlay(p)}
-                                className="text-gray-900 font-extrabold text-xs sm:text-sm mt-0.5 leading-tight tracking-tight cursor-pointer line-clamp-2 min-h-8 sm:min-h-10 hover:text-[#ff2d2d] hover:underline"
-                              >
-                                {p.name}
-                              </h4>
-                              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                                {getProductVariants(p).slice(0, 2).map((variant) => (
-                                  <span key={variant} className="text-[10px] font-mono font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100">{variant}</span>
-                                ))}
-                                <div className="flex items-center gap-0.5 text-xs text-amber-500 font-bold ml-auto font-mono">
-                                  <Star size={11} className="fill-current stroke-[3.5]" />
-                                  <span>{p.rating}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="border-t border-gray-50 pt-3 mt-3.5">
-                              <div className="flex items-end justify-between">
-                                <div>
-                                  {hasDiscount && <span className="text-[10px] text-gray-400 line-through block font-mono h-3.5 leading-none">£{p.price.toFixed(2)}</span>}
-                                  <span className="font-mono font-extrabold text-slate-900 text-sm sm:text-base leading-none">£{finalUnitPrice.toFixed(2)}</span>
-                                </div>
-                                {p.stock === 0 ? (
-                                  <span className="text-[9px] font-bold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-1 rounded-lg">OUT OF STOCK</span>
-                                ) : cartItem ? (
-                                  <div className="flex items-center gap-2.5 bg-slate-100 rounded-xl px-1.5 py-1 z-15 border border-slate-200/50">
-                                    <button onClick={() => decreaseCartCount(p.id)} className="p-1 text-slate-500 hover:bg-white rounded-md transition-all cursor-pointer shadow-3xs">
-                                      <Minus size={11} className="stroke-[3]" />
-                                    </button>
-                                    <span className="text-xs font-mono font-extrabold text-slate-900 leading-none">{cartItem.quantity}</span>
-                                    <button onClick={() => addToCart(p.id, 1)} className="p-1 text-slate-500 hover:bg-white rounded-md transition-all cursor-pointer shadow-3xs">
-                                      <Plus size={11} className="stroke-[3]" />
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => addToCart(p.id, 1)}
-                                    className="bg-[#ff2d2d] hover:bg-[#e12626] active:scale-95 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-xs flex items-center gap-1 leading-none uppercase tracking-wider text-[10px]"
-                                  >
-                                    <Plus size={12} className="stroke-[3.5]" />
-                                    <span>Add</span>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            )}
+            ) : null}
           </div>
         )}
 

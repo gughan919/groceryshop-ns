@@ -335,7 +335,7 @@ app.get('/api/categories', (req: Request, res: Response) => {
 
 app.get('/api/products', (req: Request, res: Response) => {
   let list = [...dbService.getProducts()];
-  const { search, category, brand, priceMin, priceMax, sort, availableOnly } = req.query;
+  const { search, category, brand, priceMin, priceMax, sort, availableOnly, limit: limitQuery } = req.query;
 
   // 1. Text Searching & Autocomplete instant search
   if (search) {
@@ -380,6 +380,13 @@ app.get('/api/products', (req: Request, res: Response) => {
       list.sort((a, b) => b.discount - a.discount);
     } else if (sort === 'rating') {
       list.sort((a, b) => b.rating - a.rating);
+    }
+  }
+
+  if (limitQuery) {
+    const parsedLimit = Math.max(1, Math.min(200, Number(limitQuery)));
+    if (!Number.isNaN(parsedLimit)) {
+      list = list.slice(0, parsedLimit);
     }
   }
 
