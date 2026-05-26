@@ -97,6 +97,10 @@ export interface Order {
   createdAt: string;
   timeline: OrderTimeline[];
   invoiceUrl?: string;
+  invoiceId?: string;
+  invoiceGeneratedAt?: string;
+  invoiceEmailStatus?: 'sent' | 'skipped' | 'failed';
+  invoiceEmailError?: string;
 }
 
 export interface Coupon {
@@ -115,6 +119,8 @@ export interface DashboardBanner {
   image: string;
   title: string;
   subtitle?: string;
+  offerText?: string;
+  discount?: number; // Exact product.discount value this banner should route to
   link?: string;
   active: boolean;
   sponsorName?: string;
@@ -126,4 +132,5 @@ export interface DashboardBanner {
   startDate?: string;
   endDate?: string;
   targetCategoryId?: string;
+  category?: string;
 }

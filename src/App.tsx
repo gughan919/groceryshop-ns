@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -74,6 +74,69 @@ declare global {
 
 const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
 const HOMEPAGE_PRODUCTS_LIMIT = 64;
+type DiscountFilterId = '10' | '20' | '30' | '40' | '50' | 'special' | 'flash' | 'best';
+
+const DISCOUNT_FILTERS: Array<{ id: DiscountFilterId; label: string; description: string }> = [
+  { id: '10', label: '10% Off', description: 'Products with exactly 10% savings' },
+  { id: '20', label: '20% Off', description: 'Products with exactly 20% savings' },
+  { id: '30', label: '30% Off', description: 'Products with exactly 30% savings' },
+  { id: '40', label: '40% Off', description: 'Products with exactly 40% savings' },
+  { id: '50', label: '50% Off', description: 'Products with exactly 50% savings' },
+  { id: 'special', label: 'Special Offers', description: 'Featured promoted discounts' },
+  { id: 'flash', label: 'Flash Deals', description: 'Limited high-stock fast movers' },
+  { id: 'best', label: 'Best Discounted Products', description: 'Highest discount first' }
+];
+
+function getEffectiveDiscount(product: Product) {
+  const rawDiscounts = [
+    Number(product.discount || 0),
+    ...(((product as any).discounts || []) as any[]).map((entry) => Number(entry?.value || entry?.percent || entry || 0)),
+    ...(((product as any).offers || []) as any[]).map((entry) => Number(entry?.discount || entry?.value || entry?.percent || 0))
+  ];
+  return Math.max(0, ...rawDiscounts.filter((value) => Number.isFinite(value)));
+}
+
+function getBannerDiscount(banner?: DashboardBanner | null) {
+  if (!banner) return null;
+  const explicitDiscount = Number((banner as any).discount ?? (banner as any).discountPercent ?? (banner as any).discountPercentage ?? (banner as any).offerDiscount);
+  if (Number.isFinite(explicitDiscount) && explicitDiscount > 0) return explicitDiscount;
+
+  const searchableText = [banner.title, banner.subtitle, banner.offerText, banner.badge]
+    .filter(Boolean)
+    .join(' ');
+  const match = searchableText.match(/(\d+(?:\.\d+)?)\s*%/);
+  return match ? Number(match[1]) : null;
+}
+
+function productMatchesDiscountFilter(product: Product, filterId: DiscountFilterId) {
+  const discount = getEffectiveDiscount(product);
+  if (filterId === 'special') {
+    return discount > 0 && (product.isFeatured || Boolean((product as any).specialOffer) || Boolean((product as any).offerLabel));
+  }
+  if (filterId === 'flash') {
+    return discount > 0 && (discount >= 20 || product.stock <= 25 || Boolean((product as any).flashDeal));
+  }
+  if (filterId === 'best') {
+    return discount > 0;
+  }
+  return discount === Number(filterId);
+}
+
+function sortProducts(products: Product[], sort: string) {
+  const sorted = [...products];
+  if (sort === 'price-low') {
+    sorted.sort((a, b) => (a.price * (1 - getEffectiveDiscount(a) / 100)) - (b.price * (1 - getEffectiveDiscount(b) / 100)));
+  } else if (sort === 'price-high') {
+    sorted.sort((a, b) => (b.price * (1 - getEffectiveDiscount(b) / 100)) - (a.price * (1 - getEffectiveDiscount(a) / 100)));
+  } else if (sort === 'discount') {
+    sorted.sort((a, b) => getEffectiveDiscount(b) - getEffectiveDiscount(a));
+  } else if (sort === 'rating') {
+    sorted.sort((a, b) => b.rating - a.rating);
+  } else {
+    sorted.sort((a, b) => Number(b.isFeatured || false) - Number(a.isFeatured || false) || b.rating - a.rating);
+  }
+  return sorted;
+}
 
 function isAdminUser(user: User | null) {
   const email = user?.email?.toLowerCase().trim();
@@ -146,6 +209,11 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [offerProducts, setOfferProducts] = useState<Product[]>([]);
+  const [offerLoading, setOfferLoading] = useState(false);
+  const [offerError, setOfferError] = useState<string | null>(null);
 
   // Filtering, Searching, & Navigation states
   const [searchTerm, setSearchTerm] = useState('');
@@ -193,6 +261,11 @@ export default function App() {
 
   // Current viewed pages or details
   const [activeProductOverlay, setActiveProductOverlay] = useState<Product | null>(null);
+  const [activeProductLoading, setActiveProductLoading] = useState(false);
+  const [selectedDiscountFilter, setSelectedDiscountFilter] = useState<DiscountFilterId>('10');
+  const [activeOfferDiscount, setActiveOfferDiscount] = useState<number | null>(null);
+  const [activeOfferTitle, setActiveOfferTitle] = useState<string>('');
+  const [discountPage, setDiscountPage] = useState(1);
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'catalog' | 'checkout' | 'profile' | 'admin' | 'ai' | 'success'>(() => {
     try {
@@ -277,22 +350,52 @@ export default function App() {
   const categoryMap = new Map(categories.map((category) => [category.id, category.name]));
   const whatsappSupportNumber = '447700900123';
   const activeBanner = banners[bannerIndex];
+  const activeBannerDiscount = getBannerDiscount(activeBanner);
+  const offerFallbackImage = activeBanner?.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=800&auto=format&fit=crop';
   const recentlyViewedProducts = recentlyViewedIds
     .map((id) => products.find((product) => product.id === id))
     .filter(Boolean) as Product[];
-  const featuredProducts = products.filter((product) => product.isFeatured).slice(0, 8);
-  const bestSellerProducts = [...products]
+  const catalogProducts = useMemo(() => {
+    const search = searchTerm.toLowerCase().trim();
+    const filtered = products.filter((product) => {
+      if (selectedCategoryId && product.categoryId !== selectedCategoryId) return false;
+      if (brandFilter && product.brand !== brandFilter) return false;
+      if (onlyInStock && product.stock <= 0) return false;
+      if (search) {
+        return (
+          product.name.toLowerCase().includes(search) ||
+          (product.brand || '').toLowerCase().includes(search) ||
+          product.description.toLowerCase().includes(search)
+        );
+      }
+      return true;
+    });
+    return sortProducts(filtered, sortOption).slice(0, HOMEPAGE_PRODUCTS_LIMIT);
+  }, [products, searchTerm, selectedCategoryId, brandFilter, onlyInStock, sortOption]);
+  const discountProducts = useMemo(() => {
+    if (activeOfferDiscount !== null) {
+      return sortProducts(offerProducts.filter((product) => getEffectiveDiscount(product) === activeOfferDiscount), sortOption);
+    }
+    const matching = products.filter((product) => productMatchesDiscountFilter(product, selectedDiscountFilter));
+    return sortProducts(matching, selectedDiscountFilter === 'best' ? 'discount' : sortOption);
+  }, [activeOfferDiscount, offerProducts, products, selectedDiscountFilter, sortOption]);
+  const availableBrands = useMemo(() => {
+    return Array.from(new Set(products.map((product) => product.brand).filter(Boolean) as string[])).sort();
+  }, [products]);
+  const paginatedDiscountProducts = discountProducts.slice(0, discountPage * 12);
+  const featuredProducts = catalogProducts.filter((product) => product.isFeatured).slice(0, 8);
+  const bestSellerProducts = [...catalogProducts]
     .sort((a, b) => (b.rating * (b.ratingCount || 1)) - (a.rating * (a.ratingCount || 1)))
     .slice(0, 8);
-  const flashSaleProducts = [...products]
-    .filter((product) => product.discount > 0)
-    .sort((a, b) => b.discount - a.discount)
+  const flashSaleProducts = [...catalogProducts]
+    .filter((product) => getEffectiveDiscount(product) > 0)
+    .sort((a, b) => getEffectiveDiscount(b) - getEffectiveDiscount(a))
     .slice(0, 8);
-  const trendingProducts = [...products]
+  const trendingProducts = [...catalogProducts]
     .sort((a, b) => ((b.ratingCount || 0) + b.stock) - ((a.ratingCount || 0) + a.stock))
     .slice(0, 8);
   const personalizedProducts = wishlist.length > 0
-    ? products.filter((product) => wishlist.includes(product.id)).slice(0, 4)
+    ? catalogProducts.filter((product) => wishlist.includes(product.id)).slice(0, 4)
     : featuredProducts.slice(0, 4);
   const accentGradients = [
     'from-red-500/12 to-red-50',
@@ -304,11 +407,11 @@ export default function App() {
     ...category,
     accent: accentGradients[index % accentGradients.length]
   }));
-  const dailyEssentialsProducts = products
+  const dailyEssentialsProducts = catalogProducts
     .filter((product) => product.stock > 0)
     .sort((a, b) => ((b.ratingCount || 0) + b.rating) - ((a.ratingCount || 0) + a.rating))
     .slice(0, 8);
-  const freshPicksProducts = products
+  const freshPicksProducts = catalogProducts
     .filter((product) => product.stock > 0 && product.rating >= 4)
     .sort((a, b) => b.stock - a.stock)
     .slice(0, 8);
@@ -344,9 +447,25 @@ export default function App() {
     upsertMeta('og:description', 'Discover fresh produce, pantry staples, and premium grocery deals with NammaShop UK.', 'property');
   }, [viewMode]);
 
-  const openProductOverlay = (product: Product) => {
+  const openProductOverlay = async (product: Product, updateHistory = true) => {
+    setActiveProductLoading(true);
     setActiveProductOverlay(product);
+    if (updateHistory) {
+      window.history.pushState({}, '', `/?product=${encodeURIComponent(product.id)}`);
+    }
     setRecentlyViewedIds((prev) => [product.id, ...prev.filter((id) => id !== product.id)].slice(0, 10));
+    try {
+      const response = await fetch(`/api/products/${encodeURIComponent(product.id)}`);
+      if (response.ok) {
+        setActiveProductOverlay(await response.json());
+      } else {
+        notifyUser('Product details could not be loaded.', 'error');
+      }
+    } catch {
+      notifyUser('Product details are temporarily unavailable.', 'error');
+    } finally {
+      setActiveProductLoading(false);
+    }
   };
 
   const getProductVariants = (product: Product) => {
@@ -354,7 +473,43 @@ export default function App() {
     return [baseUnit, `2 x ${baseUnit}`, `Family ${baseUnit}`].slice(0, 3);
   };
 
+  const routeToOfferDiscount = (discount: number, title?: string) => {
+    const normalizedDiscount = Number(discount);
+    if (!Number.isFinite(normalizedDiscount) || normalizedDiscount <= 0) return false;
+
+    setActiveOfferDiscount(normalizedDiscount);
+    setActiveOfferTitle(title || `${normalizedDiscount}% Off`);
+    setDiscountPage(1);
+    setViewMode('catalog');
+
+    const params = new URLSearchParams(window.location.search);
+    params.set('offerDiscount', String(normalizedDiscount));
+    if (title) params.set('offerTitle', title);
+    params.delete('product');
+    window.history.pushState({}, '', `/?${params.toString()}`);
+
+    requestAnimationFrame(() => {
+      document.getElementById('discount-offers')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    return true;
+  };
+
+  const clearOfferDiscountRoute = () => {
+    setActiveOfferDiscount(null);
+    setActiveOfferTitle('');
+    setOfferProducts([]);
+    setOfferError(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('offerDiscount');
+    params.delete('offerTitle');
+    window.history.pushState({}, '', params.toString() ? `/?${params.toString()}` : '/');
+  };
+
   const handleBannerNavigate = (banner: DashboardBanner, fallbackCategoryId?: string | null) => {
+    const discount = getBannerDiscount(banner);
+    if (discount && routeToOfferDiscount(discount, banner.offerText || banner.title)) {
+      return;
+    }
     if (fallbackCategoryId) {
       setSelectedCategoryId(fallbackCategoryId);
       setViewMode('catalog');
@@ -478,6 +633,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const status = params.get('status');
     const orderId = params.get('orderId');
+    const sessionId = params.get('session_id');
     const urlToken = params.get('token');
 
     let activeToken = token;
@@ -509,7 +665,7 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${activeToken}`
         },
-        body: JSON.stringify({ orderId })
+        body: JSON.stringify({ orderId, sessionId })
       })
       .then(async (res) => {
         const data = await res.json();
@@ -578,11 +734,20 @@ export default function App() {
       });
 
       unsubBanners = onSnapshot(collection(firestoreDb, 'banners'), (snapshot) => {
+        const now = Date.now();
         const banList: DashboardBanner[] = [];
         snapshot.forEach((doc) => {
           banList.push({ id: doc.id, ...doc.data() } as DashboardBanner);
         });
-        if (banList.length > 0) setBanners(banList);
+        const liveBanners = banList
+          .filter((banner) => {
+            if (!banner.active) return false;
+            const startOk = !banner.startDate || new Date(banner.startDate).getTime() <= now;
+            const endOk = !banner.endDate || new Date(banner.endDate).getTime() >= now;
+            return startOk && endOk;
+          })
+          .sort((a, b) => (a.priority || 999) - (b.priority || 999));
+        if (liveBanners.length > 0) setBanners(liveBanners);
       }, (error) => {
         console.warn('Real-time Banners snapshot listener offline.');
       });
@@ -704,23 +869,72 @@ export default function App() {
     return () => window.removeEventListener('popstate', checkAdminPath);
   }, [currentUser, authInitialized]);
 
+  useEffect(() => {
+    const syncProductRoute = () => {
+      const params = new URLSearchParams(window.location.search);
+      const productId = params.get('product');
+      if (!productId) {
+        setActiveProductOverlay(null);
+        return;
+      }
+      const localProduct = products.find((product) => product.id === productId);
+      if (localProduct) {
+        openProductOverlay(localProduct, false);
+      }
+    };
+    syncProductRoute();
+    window.addEventListener('popstate', syncProductRoute);
+    return () => window.removeEventListener('popstate', syncProductRoute);
+  }, [products]);
+
+  useEffect(() => {
+    const syncOfferRoute = () => {
+      const params = new URLSearchParams(window.location.search);
+      const discount = Number(params.get('offerDiscount'));
+      if (Number.isFinite(discount) && discount > 0) {
+        setActiveOfferDiscount(discount);
+        setActiveOfferTitle(params.get('offerTitle') || `${discount}% Off`);
+      } else {
+        setActiveOfferDiscount(null);
+        setActiveOfferTitle('');
+      }
+    };
+
+    syncOfferRoute();
+    window.addEventListener('popstate', syncOfferRoute);
+    return () => window.removeEventListener('popstate', syncOfferRoute);
+  }, []);
+
+  useEffect(() => {
+    if (activeOfferDiscount === null) {
+      setOfferProducts([]);
+      setOfferLoading(false);
+      setOfferError(null);
+      return;
+    }
+
+    setOfferLoading(true);
+    setOfferError(null);
+    const offerQuery = query(collection(firestoreDb, 'products'), where('discount', '==', activeOfferDiscount));
+    const unsubscribe = onSnapshot(offerQuery, (snapshot) => {
+      setOfferProducts(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Product)));
+      setOfferLoading(false);
+      setOfferError(null);
+    }, (error) => {
+      console.warn('Exact discount Firestore query unavailable:', error.message);
+      setOfferProducts(products.filter((product) => getEffectiveDiscount(product) === activeOfferDiscount));
+      setOfferError('Live offer query is temporarily unavailable. Showing cached matching products.');
+      setOfferLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [activeOfferDiscount, products]);
+
   const fetchCatalogs = async () => {
     try {
       // 1. Fetch categories
       const catResp = await fetch('/api/categories');
       if (catResp.ok) setCategories(await catResp.json());
-
-      // 2. Fetch products
-      const prodParams = new URLSearchParams();
-      if (searchTerm) prodParams.append('search', searchTerm);
-      if (selectedCategoryId) prodParams.append('category', selectedCategoryId);
-      if (brandFilter) prodParams.append('brand', brandFilter);
-      if (sortOption) prodParams.append('sort', sortOption);
-      if (onlyInStock) prodParams.append('availableOnly', 'true');
-
-      prodParams.append('limit', String(HOMEPAGE_PRODUCTS_LIMIT));
-      const prodResp = await fetch(`/api/products?${prodParams.toString()}`);
-      if (prodResp.ok) setProducts(await prodResp.json());
 
       // 3. Banners
       const banResp = await fetch('/api/banners');
@@ -740,6 +954,21 @@ export default function App() {
       }
     } catch (err) {
       console.warn('Backend API fetching offline. Bootstrapping simulated local layers...');
+    }
+  };
+
+  const fetchProductsFallback = async () => {
+    try {
+      setCatalogLoading(true);
+      const prodResp = await fetch('/api/products?limit=600&sort=discount');
+      if (!prodResp.ok) throw new Error('Product fallback API failed');
+      setProducts(await prodResp.json());
+      setCatalogError(null);
+    } catch (error) {
+      console.warn('Product catalog fallback failed:', error);
+      setCatalogError('Unable to load live product catalog.');
+    } finally {
+      setCatalogLoading(false);
     }
   };
 
@@ -793,10 +1022,34 @@ export default function App() {
     }
   };
 
-  // Trigger search and filter refetch
+  useEffect(() => {
+    setCatalogLoading(true);
+    const productsRef = collection(firestoreDb, 'products');
+    const unsubscribe = onSnapshot(productsRef, (snapshot) => {
+      const liveProducts = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Product));
+      if (liveProducts.length > 0) {
+        setProducts(liveProducts);
+        setCatalogError(null);
+        setCatalogLoading(false);
+      } else {
+        fetchProductsFallback();
+      }
+    }, (error) => {
+      console.warn('Firestore product stream unavailable, using API fallback:', error.message);
+      setCatalogError('Live Firestore stream unavailable. Showing server catalog fallback.');
+      fetchProductsFallback();
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    setDiscountPage(1);
+  }, [activeOfferDiscount, selectedDiscountFilter, sortOption, products, offerProducts]);
+
+  // Trigger supporting catalog metadata refetch
   useEffect(() => {
     fetchCatalogs();
-  }, [searchTerm, selectedCategoryId, sortOption, brandFilter, onlyInStock]);
+  }, [token]);
 
   useEffect(() => {
     // Generate recaptcha verifier when auth mode opens
@@ -1236,7 +1489,7 @@ export default function App() {
   }).filter(c => c.details !== undefined);
 
   const cartSubtotal = cartDetails.reduce((sum, item) => {
-    const finalPrice = item.details!.price * (1 - item.details!.discount / 100);
+    const finalPrice = item.details!.price * (1 - getEffectiveDiscount(item.details!) / 100);
     return sum + (finalPrice * item.quantity);
   }, 0);
 
@@ -2251,7 +2504,7 @@ export default function App() {
                 
                 <div className="space-y-3">
                   {cartDetails.map((it, idx) => {
-                    const priceNode = it.details!.price * (1 - it.details!.discount / 100);
+                    const priceNode = it.details!.price * (1 - getEffectiveDiscount(it.details!) / 100);
                     return (
                       <div key={idx} className="flex justify-between items-center text-xs text-slate-600">
                         <span>{it.details!.name} ({it.details!.unit}) x <strong>{it.quantity}</strong></span>
@@ -2442,13 +2695,16 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.24em] text-slate-700">
                     <span className="rounded-full bg-red-50 text-[#ff2d2d] px-3 py-1">{activeBanner?.badge || 'Sponsored campaign'}</span>
                     <span className="rounded-full bg-slate-100 px-3 py-1">{activeBanner?.sponsorName || 'UK grocery express'}</span>
+                    {activeBannerDiscount !== null && (
+                      <span className="rounded-full bg-rose-600 px-3 py-1 text-white">{activeBannerDiscount}% off</span>
+                    )}
                   </div>
                   <div className="space-y-3">
                     <h2 className="max-w-xl font-['Fraunces'] text-3xl leading-[1.05] sm:text-5xl">
                       {activeBanner?.title || 'Premium groceries, household essentials, and weekly staples delivered beautifully.'}
                     </h2>
                     <p className="max-w-lg text-sm leading-6 text-slate-600 sm:text-base">
-                      {activeBanner?.subtitle || 'Built for UK shoppers with fast delivery windows, curated offers, and a polished mobile-first experience that feels like a real production storefront.'}
+                      {activeBanner?.offerText || activeBanner?.subtitle || 'Built for UK shoppers with fast delivery windows, curated offers, and a polished mobile-first experience that feels like a real production storefront.'}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-3">
@@ -2657,11 +2913,9 @@ export default function App() {
                   className="bg-slate-50 border border-slate-100 hover:border-slate-200 outline-none rounded-xl px-3 py-2 font-bold text-[11px] text-slate-600 cursor-pointer"
                 >
                   <option value="">All Brands</option>
-                  <option value="Namma Farms">Namma Farms</option>
-                  <option value="Amul">Amul Dairy</option>
-                  <option value="Lays">Lays</option>
-                  <option value="Coca Cola">Coca Cola</option>
-                  <option value="Cadbury">Cadbury Chocolates</option>
+                  {availableBrands.map((brand) => (
+                    <option key={brand} value={brand}>{brand}</option>
+                  ))}
                 </select>
                 <label className="flex items-center gap-2 cursor-pointer font-bold select-none text-slate-500 text-[11px] mt-0.5">
                   <input
@@ -2675,6 +2929,160 @@ export default function App() {
               </div>
               <span className="text-[10px] text-gray-400 font-mono tracking-wider uppercase">Compact mode: <strong>{Math.min(products.length, HOMEPAGE_PRODUCTS_LIMIT)}</strong> loaded</span>
             </div>
+
+            <section id="discount-offers" className="scroll-mt-24 space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-rose-500">{activeOfferDiscount !== null ? 'Banner offer' : 'Discount tab'}</p>
+                  <h3 className="text-xl font-extrabold text-slate-900">{activeOfferDiscount !== null ? activeOfferTitle || `${activeOfferDiscount}% Off Products` : 'Live Discount Deals'}</h3>
+                  <p className="text-sm text-slate-500">
+                    {activeOfferDiscount !== null
+                      ? `Showing products where discount is exactly ${activeOfferDiscount}%.`
+                      : DISCOUNT_FILTERS.find((filter) => filter.id === selectedDiscountFilter)?.description}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {activeOfferDiscount !== null && (
+                    <button
+                      onClick={clearOfferDiscountRoute}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50"
+                    >
+                      All discount tabs
+                    </button>
+                  )}
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    {discountProducts.length} matching products
+                  </span>
+                </div>
+              </div>
+
+              {activeOfferDiscount === null && (
+              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                {DISCOUNT_FILTERS.map((filter) => (
+                  <button
+                    key={filter.id}
+                    onClick={() => setSelectedDiscountFilter(filter.id)}
+                    className={`shrink-0 rounded-2xl border px-4 py-2.5 text-xs font-extrabold transition ${
+                      selectedDiscountFilter === filter.id
+                        ? 'border-rose-500 bg-rose-500 text-white shadow-sm'
+                        : 'border-slate-100 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+              )}
+
+              {catalogLoading || offerLoading ? (
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <div key={index} className="h-64 animate-pulse rounded-[1.4rem] border border-slate-100 bg-white p-3">
+                      <div className="h-32 rounded-2xl bg-slate-100" />
+                      <div className="mt-4 h-3 rounded bg-slate-100" />
+                      <div className="mt-2 h-3 w-2/3 rounded bg-slate-100" />
+                      <div className="mt-5 h-8 rounded-xl bg-slate-100" />
+                    </div>
+                  ))}
+                </div>
+              ) : catalogError && activeOfferDiscount === null ? (
+                <div className="rounded-[1.4rem] border border-amber-100 bg-amber-50 p-5 text-sm font-semibold text-amber-800">
+                  {catalogError}
+                </div>
+              ) : discountProducts.length === 0 ? (
+                <div className="text-center py-12 space-y-3 bg-white border border-slate-100 rounded-[1.4rem]">
+                  {activeOfferDiscount !== null && (
+                    <img src={offerFallbackImage} alt="" className="mx-auto h-24 w-24 rounded-2xl object-cover opacity-75" referrerPolicy="no-referrer" />
+                  )}
+                  <AlertCircle className="mx-auto text-slate-300" size={32} />
+                  <h4 className="font-extrabold text-slate-800 text-sm">
+                    {activeOfferDiscount !== null ? 'No products available for this offer' : 'No discounted products found'}
+                  </h4>
+                  <p className="text-slate-400 text-xs">
+                    {activeOfferDiscount !== null
+                      ? `No live products currently have exactly ${activeOfferDiscount}% discount.`
+                      : 'Choose another discount tab or add discounts in the admin catalog.'}
+                  </p>
+                  {activeOfferDiscount !== null && (
+                    <button
+                      onClick={() => routeToOfferDiscount(activeOfferDiscount, activeOfferTitle)}
+                      className="rounded-xl bg-rose-500 px-4 py-2 text-xs font-bold text-white hover:bg-rose-600"
+                    >
+                      Retry offer
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {offerError && (
+                    <div className="rounded-[1.2rem] border border-amber-100 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                      {offerError}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
+                    {paginatedDiscountProducts.map((product) => {
+                      const discount = getEffectiveDiscount(product);
+                      const finalUnitPrice = product.price * (1 - discount / 100);
+                      return (
+                        <article key={`discount-${product.id}`} className="rounded-[1.4rem] border border-white/80 bg-white p-2.5 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.45)]">
+                          <button
+                            onClick={() => openProductOverlay(product)}
+                            className="relative block h-32 w-full overflow-hidden rounded-[1.2rem] bg-slate-50 text-left"
+                          >
+                            <img
+                              src={product.image || offerFallbackImage}
+                              alt={product.name}
+                              className="h-full w-full object-cover"
+                              referrerPolicy="no-referrer"
+                              onError={(event) => {
+                                event.currentTarget.src = offerFallbackImage;
+                              }}
+                            />
+                            <span className="absolute left-2 top-2 rounded-full bg-rose-500 px-2 py-1 text-[10px] font-bold text-white">{discount}% OFF</span>
+                            <span
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleWishlist(product.id);
+                              }}
+                              className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-rose-500 shadow-sm"
+                              role="button"
+                              aria-label={wishlist.includes(product.id) ? 'Remove from wishlist' : 'Add to wishlist'}
+                            >
+                              <Heart size={14} fill={wishlist.includes(product.id) ? 'currentColor' : 'none'} />
+                            </span>
+                          </button>
+                          <button onClick={() => openProductOverlay(product)} className="mt-3 line-clamp-2 text-left text-sm font-extrabold leading-5 text-slate-900">
+                            {product.name}
+                          </button>
+                          <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{product.brand || 'NammaShop'}</p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold text-slate-500">
+                            <span className="inline-flex items-center gap-1"><Star size={12} className="fill-amber-400 text-amber-400" />{product.rating?.toFixed(1) || '4.5'}</span>
+                            <span className="inline-flex items-center gap-1"><Truck size={12} />18-25 min</span>
+                          </div>
+                          <div className="mt-2 flex items-end justify-between gap-2">
+                            <div>
+                              <p className="text-[11px] text-slate-400 line-through">£{product.price.toFixed(2)}</p>
+                              <p className="text-base font-extrabold text-slate-900">£{finalUnitPrice.toFixed(2)}</p>
+                            </div>
+                            <button onClick={() => addToCart(product.id, 1)} className="rounded-xl bg-[#ff2d2d] px-3 py-2 text-[10px] font-bold text-white">
+                              Add
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                  {discountProducts.length > paginatedDiscountProducts.length && (
+                    <button
+                      onClick={() => setDiscountPage((page) => page + 1)}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                    >
+                      Load more discounts
+                    </button>
+                  )}
+                </>
+              )}
+            </section>
 
             <section className="space-y-8">
               {[
@@ -2702,8 +3110,9 @@ export default function App() {
                   </div>
                   <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory no-scrollbar">
                     {visibleItems.map((p) => {
-                      const hasDiscount = p.discount > 0;
-                      const finalUnitPrice = p.price * (1 - p.discount / 100);
+                      const discount = getEffectiveDiscount(p);
+                      const hasDiscount = discount > 0;
+                      const finalUnitPrice = p.price * (1 - discount / 100);
                       const isSavedInWishlist = wishlist.includes(p.id);
                       const cartItem = cart.find((c) => c.productId === p.id);
 
@@ -2715,7 +3124,7 @@ export default function App() {
                           <div className="relative">
                             {hasDiscount && (
                               <div className="absolute left-3 top-3 z-10 rounded-full bg-rose-500 px-2.5 py-1 text-[10px] font-bold text-white">
-                                {p.discount}% OFF
+                                {discount}% OFF
                               </div>
                             )}
                             <button
@@ -2871,7 +3280,7 @@ export default function App() {
                 </div>
               ) : (
                 cartDetails.map(it => {
-                  const unitPrice = it.details!.price * (1 - it.details!.discount / 100);
+                  const unitPrice = it.details!.price * (1 - getEffectiveDiscount(it.details!) / 100);
                   return (
                     <div key={it.productId} className="flex gap-3 bg-slate-50/50 p-3 rounded-2xl border border-slate-100 text-xs text-slate-800 justify-between items-center relative">
                       <div className="flex gap-2.5 items-center">
@@ -2957,11 +3366,19 @@ export default function App() {
           <div className="bg-white border border-slate-100 rounded-3xl w-full max-w-2xl overflow-hidden max-h-[85vh] flex flex-col shadow-2xl relative animate-in zoom-in-95 duration-200">
             
             <button
-              onClick={() => setActiveProductOverlay(null)}
+              onClick={() => {
+                setActiveProductOverlay(null);
+                window.history.replaceState({}, '', '/');
+              }}
               className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 bg-white/70 backdrop-blur-3xs p-1.5 rounded-full z-15 shadow-3xs"
             >
               <X size={16} />
             </button>
+            {activeProductLoading && (
+              <div className="absolute inset-x-0 top-0 h-1 overflow-hidden bg-slate-100">
+                <div className="h-full w-1/2 animate-pulse bg-emerald-500" />
+              </div>
+            )}
 
             {/* Scrollable specs sheet */}
             <div className="overflow-y-auto p-5 sm:p-6 space-y-6 flex-1">
@@ -2986,6 +3403,22 @@ export default function App() {
                   </div>
 
                   <p className="text-gray-500 leading-relaxed pt-1.5 text-[11px] whitespace-pre-wrap">{activeProductOverlay.description}</p>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {getProductVariants(activeProductOverlay).map((variant) => (
+                      <span key={variant} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-600">
+                        {variant}
+                      </span>
+                    ))}
+                    <span className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-700">
+                      Delivery: 10-25 mins
+                    </span>
+                    {getEffectiveDiscount(activeProductOverlay) > 0 && (
+                      <span className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[10px] font-bold text-rose-700">
+                        Offer: {getEffectiveDiscount(activeProductOverlay)}% off
+                      </span>
+                    )}
+                  </div>
                   
                   <div className="pt-2">
                     <button
@@ -2995,7 +3428,7 @@ export default function App() {
                       }}
                       className="bg-[#ff2d2d] hover:bg-[#e12626] text-white font-bold px-4 py-2 text-xs rounded-xl transition-all cursor-pointer shadow-xs uppercase tracking-wide inline-block"
                     >
-                      Add unit to Cart (£{(activeProductOverlay.price * (1 - activeProductOverlay.discount/100)).toFixed(2)})
+                      Add unit to Cart (£{(activeProductOverlay.price * (1 - getEffectiveDiscount(activeProductOverlay)/100)).toFixed(2)})
                     </button>
                   </div>
                 </div>

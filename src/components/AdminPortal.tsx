@@ -133,6 +133,8 @@ export default function AdminPortal({
     image: '',
     title: '',
     subtitle: '',
+    offerText: '',
+    discount: '',
     link: '',
     sponsorName: '',
     badge: '',
@@ -344,17 +346,40 @@ export default function AdminPortal({
   const handleBannerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const payload = {
+        ...bannerForm,
+        discount: bannerForm.discount === '' ? undefined : Number(bannerForm.discount),
+        campaignType: bannerForm.discount ? 'offer' : bannerForm.campaignType
+      };
       const resp = await fetch('/api/admin/banners', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(bannerForm)
+        body: JSON.stringify(payload)
       });
       if (resp.ok) {
         onNotify('New promotional slider published on homepage.', 'success');
         setIsAddingBanner(false);
+        setBannerForm({
+          image: '',
+          title: '',
+          subtitle: '',
+          offerText: '',
+          discount: '',
+          link: '',
+          sponsorName: '',
+          badge: '',
+          ctaLabel: 'Shop Now',
+          secondaryCtaLabel: 'Explore Collection',
+          campaignType: 'sponsored',
+          priority: '99',
+          startDate: '',
+          endDate: '',
+          targetCategoryId: '',
+          active: true
+        });
         onRefreshAllData();
       }
     } catch {
@@ -1131,7 +1156,7 @@ export default function AdminPortal({
                         </select>
                         
                         <a
-                          href={`/api/orders/${o.id}/invoice`}
+                          href={o.invoiceUrl || `/api/orders/${o.id}/invoice`}
                           download
                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-3 rounded-lg text-[11px] flex items-center gap-1 cursor-pointer transition-all"
                         >
@@ -1366,6 +1391,31 @@ export default function AdminPortal({
                   </div>
 
                   <div>
+                    <label className="block text-gray-500 font-semibold mb-1">Exact discount route (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={bannerForm.discount}
+                      onChange={(e) => setBannerForm({ ...bannerForm, discount: e.target.value })}
+                      placeholder="e.g. 10"
+                      className="w-full bg-slate-50 border border-slate-100 focus:border-emerald-500 px-3 py-2 rounded-xl focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-500 font-semibold mb-1">Offer text</label>
+                    <input
+                      type="text"
+                      value={bannerForm.offerText}
+                      onChange={(e) => setBannerForm({ ...bannerForm, offerText: e.target.value })}
+                      placeholder="e.g. 10% OFF on Grocery Essentials"
+                      className="w-full bg-slate-50 border border-slate-100 focus:border-emerald-500 px-3 py-2 rounded-xl focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
                     <label className="block text-gray-500 font-semibold mb-1">Sponsor / brand</label>
                     <input
                       type="text"
@@ -1554,6 +1604,9 @@ export default function AdminPortal({
                     </div>
                     <h4 className="text-gray-800 font-bold block truncate leading-tight">{b.title}</h4>
                     <p className="text-[10px] text-gray-400 font-medium tracking-wide block truncate">{b.subtitle || 'No subtext.'}</p>
+                    <p className="text-[10px] text-rose-500 font-bold">
+                      {b.discount ? `${b.discount}% exact discount route` : 'No discount route'}
+                    </p>
                     <p className="text-[10px] text-slate-500">Sponsor: {b.sponsorName || 'NammaShop'}</p>
                     <p className="text-[10px] text-slate-400">Priority {b.priority || 99}{b.startDate ? ` • Starts ${new Date(b.startDate).toLocaleDateString()}` : ''}</p>
                     <div className="flex justify-between items-center border-t border-gray-50 pt-2 mt-2">

@@ -1,14 +1,22 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import { execFile } from 'child_process';
+import { createRequire } from 'module';
+import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
 import { dbService, saveDb } from './server/db';
+import { uploadFileToFirebaseStorage } from './server/firebase-server';
 import { GoogleGenAI, Type } from '@google/genai';
 import { User, Address, Product, Category, Order, Coupon, DashboardBanner, Review } from './src/types';
 import Stripe from 'stripe';
 
 const app = express();
 const PORT = 3000;
+const execFileAsync = promisify(execFile);
+const requireOptional = createRequire(path.join(process.cwd(), 'server.ts'));
+const GENERATED_INVOICE_DIR = path.join(process.cwd(), 'data', 'generated-invoices');
 
 let stripeClient: Stripe | null = null;
 function getStripe(): Stripe | null {
@@ -26,6 +34,147 @@ const PENDING_STRIPE_ORDERS: Record<string, Order> = {};
 
 // Apply middle-wares
 app.use(express.json({ limit: '10mb' }));
+fs.mkdirSync(GENERATED_INVOICE_DIR, { recursive: true });
+app.use('/generated-invoices', express.static(GENERATED_INVOICE_DIR, {
+  fallthrough: false,
+  setHeaders: (res) => {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+  }
+}));
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function canAccessOrder(user: User, order: Order) {
+  return user.role === 'admin' || isAdminEmail(user.email) || order.userId === user.id;
+}
+
+function validateInvoiceOrder(order: Order) {
+  const missing: string[] = [];
+  if (!order.userName && !order.address?.fullName) missing.push('customer name');
+  if (!order.userEmail) missing.push('email');
+  if (!order.address?.phone) missing.push('phone');
+  if (!order.address?.street || !order.address?.city || !order.address?.state || !order.address?.pincode) missing.push('delivery address');
+  if (!order.id) missing.push('order ID');
+  if (!Array.isArray(order.items) || order.items.length === 0) missing.push('product list');
+  if (order.items?.some(item => !item.productName || !item.quantity || item.price === undefined)) missing.push('product quantity/prices');
+  if (order.paymentStatus !== 'Paid') missing.push('paid payment status');
+  if (missing.length > 0) {
+    throw new Error(`Cannot generate invoice. Missing or invalid: ${Array.from(new Set(missing)).join(', ')}.`);
+  }
+}
+
+async function runWithRetry<T>(operation: () => Promise<T>, attempts = 3) {
+  let lastError: any;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await sleep(450 * attempt);
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function generateInvoicePdf(order: Order) {
+  validateInvoiceOrder(order);
+  const safeOrderId = order.id.replace(/[^a-zA-Z0-9_-]/g, '');
+  const invoiceId = `INV-${safeOrderId}`;
+  const jsonPath = path.join(GENERATED_INVOICE_DIR, `${invoiceId}.json`);
+  const pdfPath = path.join(GENERATED_INVOICE_DIR, `${invoiceId}.pdf`);
+
+  const enrichedOrder = {
+    ...order,
+    invoiceId,
+    deliveryEstimate: 'Express delivery window',
+    storeLogoUrl: process.env.STORE_LOGO_URL || ''
+  };
+
+  fs.writeFileSync(jsonPath, JSON.stringify(enrichedOrder, null, 2), 'utf-8');
+
+  await runWithRetry(async () => {
+    await execFileAsync('python', [
+      path.join(process.cwd(), 'scripts', 'generate_invoice.py'),
+      jsonPath,
+      pdfPath
+    ], { timeout: 30000, maxBuffer: 1024 * 1024 });
+
+    const stats = fs.statSync(pdfPath);
+    if (!stats.size || stats.size < 1000) {
+      throw new Error('Generated invoice PDF is empty.');
+    }
+  });
+
+  return { invoiceId, pdfPath };
+}
+
+async function sendInvoiceEmail(order: Order, invoicePath: string, invoiceUrl: string) {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = Number(process.env.SMTP_PORT || 587);
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const from = process.env.INVOICE_FROM_EMAIL || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass || !from) {
+    return {
+      status: 'skipped' as const,
+      error: 'SMTP settings are not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and INVOICE_FROM_EMAIL to send real invoice emails.'
+    };
+  }
+
+  try {
+    const nodemailer = requireOptional('nodemailer');
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: { user: smtpUser, pass: smtpPass }
+    });
+
+    await runWithRetry(() => transporter.sendMail({
+      from,
+      to: order.userEmail,
+      subject: `NammaShop invoice ${order.id}`,
+      text: `Thank you for shopping with NammaShop. Your invoice is attached and can also be downloaded here: ${invoiceUrl}`,
+      attachments: [
+        {
+          filename: `Invoice-${order.id}.pdf`,
+          path: invoicePath,
+          contentType: 'application/pdf'
+        }
+      ]
+    }));
+
+    return { status: 'sent' as const };
+  } catch (error: any) {
+    console.error('[INVOICE EMAIL FAILURE]:', error);
+    return {
+      status: 'failed' as const,
+      error: error.message || 'Invoice email failed.'
+    };
+  }
+}
+
+async function generateAndAttachInvoice(order: Order, publicBaseUrl = process.env.APP_URL || `http://localhost:${PORT}`) {
+  if (order.invoiceUrl || order.paymentStatus !== 'Paid') return order;
+
+  const { invoiceId, pdfPath } = await generateInvoicePdf(order);
+  const localUrl = `/generated-invoices/${path.basename(pdfPath)}`;
+  const firebaseUrl = await uploadFileToFirebaseStorage(pdfPath, `invoices/${order.userId}/${invoiceId}.pdf`, 'application/pdf');
+  const invoiceUrl = firebaseUrl || localUrl;
+  const emailResult = await sendInvoiceEmail(order, pdfPath, `${publicBaseUrl.replace(/\/$/, '')}${localUrl}`);
+  return dbService.updateOrderInvoice(order.id, invoiceUrl, {
+    invoiceId,
+    invoiceGeneratedAt: new Date().toISOString(),
+    invoiceEmailStatus: emailResult.status,
+    invoiceEmailError: emailResult.error
+  }) || order;
+}
 
 // Secure Session Cache (In-Memory for security)
 const SECTOR_SESSIONS: Record<string, User> = {
@@ -602,16 +751,10 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
             }
           }
 
-          const lineItems = orderItemsParsed.map(item => ({
-            price_data: {
-              currency: 'gbp',
-              product_data: {
-                name: item.productName,
-              },
-              unit_amount: Math.round(item.price * 100), // in pence
-            },
-            quantity: item.quantity,
-          }));
+          const itemSummary = orderItemsParsed
+            .map(item => `${item.productName} x ${item.quantity}`)
+            .join(', ')
+            .slice(0, 500);
 
           const originUrl = (clientOrigin || process.env.APP_URL || req.headers.origin || 'http://localhost:3000').replace(/\/$/, '');
           const tokenParam = clientToken ? `&token=${encodeURIComponent(clientToken as string)}` : '';
@@ -619,10 +762,26 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
           // Define low latency timeout settings for the checkout contact request
           const session = await stripeInstance.checkout.sessions.create({
             payment_method_types: ['card'],
-            line_items: lineItems,
+            line_items: [
+              {
+                price_data: {
+                  currency: 'gbp',
+                  product_data: {
+                    name: `Nammashop order ${orderId}`,
+                    description: itemSummary || 'Fresh grocery order'
+                  },
+                  unit_amount: Math.round(total * 100),
+                },
+                quantity: 1,
+              }
+            ],
             mode: 'payment',
-            success_url: `${originUrl}/?status=stripe-success&orderId=${orderId}${tokenParam}`,
+            success_url: `${originUrl}/?status=stripe-success&orderId=${orderId}&session_id={CHECKOUT_SESSION_ID}${tokenParam}`,
             cancel_url: `${originUrl}/?status=stripe-cancel${tokenParam}`,
+            metadata: {
+              orderId,
+              userId: user.id
+            },
           }, {
             maxNetworkRetries: 1,
             timeout: 5000, // 5 seconds connection fallback timeout limit
@@ -647,10 +806,11 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       } else {
         // Fallback for demo when Stripe key is not configured yet
         newOrder.paymentStatus = 'Paid';
-        dbService.createOrder(newOrder);
+        const committedOrder = dbService.createOrder(newOrder);
+        const invoicedOrder = await generateAndAttachInvoice(committedOrder, (clientOrigin || process.env.APP_URL || req.headers.origin || `http://localhost:${PORT}`) as string);
         return res.json({
           success: true,
-          order: newOrder,
+          order: invoicedOrder,
           stripeMocked: true,
           message: 'Stripe API key (STRIPE_SECRET_KEY) not set. Simulating instant successful Stripe mock transaction.'
         });
@@ -658,11 +818,14 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
     }
 
     // Safe transaction: checking levels and reducing stock atomically
-    dbService.createOrder(newOrder);
+    const committedOrder = dbService.createOrder(newOrder);
+    const responseOrder = committedOrder.paymentStatus === 'Paid'
+      ? await generateAndAttachInvoice(committedOrder, (clientOrigin || process.env.APP_URL || req.headers.origin || `http://localhost:${PORT}`) as string)
+      : committedOrder;
 
     res.json({
       success: true,
-      order: newOrder
+      order: responseOrder
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Checkout failed.' });
@@ -681,13 +844,39 @@ app.get('/api/orders', authenticate, (req: Request, res: Response) => {
 // Confirm and process Stripe payments securely post-redirect
 app.post('/api/orders/confirm-stripe', authenticate, async (req: Request, res: Response) => {
   try {
-    const { orderId } = req.body;
+    const { orderId, sessionId } = req.body;
     if (!orderId) {
       return res.status(400).json({ error: 'Order security token ID is required for validation.' });
     }
 
     const pendingOrder = PENDING_STRIPE_ORDERS[orderId];
     const existing = dbService.getOrders().find(o => o.id === orderId);
+    const orderForVerification = existing || pendingOrder;
+
+    if (!orderForVerification) {
+      return res.status(404).json({ error: 'Order transaction expired or not found.' });
+    }
+
+    const stripeInstance = getStripe();
+    if (stripeInstance) {
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Stripe checkout session ID is required for payment verification.' });
+      }
+
+      const session = await stripeInstance.checkout.sessions.retrieve(sessionId as string);
+      if (session.metadata?.orderId !== orderId) {
+        return res.status(400).json({ error: 'Stripe session does not match this order.' });
+      }
+      if (session.payment_status !== 'paid') {
+        return res.status(402).json({ error: 'Stripe payment has not been completed yet.' });
+      }
+
+      const paidAmount = typeof session.amount_total === 'number' ? session.amount_total : 0;
+      const expectedAmount = Math.round(orderForVerification.total * 100);
+      if (paidAmount !== expectedAmount) {
+        return res.status(400).json({ error: 'Stripe paid amount does not match this order total.' });
+      }
+    }
 
     if (existing) {
       if (existing.paymentStatus !== 'Paid') {
@@ -695,17 +884,19 @@ app.post('/api/orders/confirm-stripe', authenticate, async (req: Request, res: R
         if (pendingOrder) {
           delete PENDING_STRIPE_ORDERS[orderId];
         }
+        const invoicedOrder = await generateAndAttachInvoice(updated || existing);
         return res.json({
           success: true,
-          order: updated || existing
+          order: invoicedOrder
         });
       }
       if (pendingOrder) {
         delete PENDING_STRIPE_ORDERS[orderId];
       }
+      const invoicedOrder = await generateAndAttachInvoice(existing);
       return res.json({
         success: true,
-        order: existing
+        order: invoicedOrder
       });
     }
 
@@ -719,13 +910,14 @@ app.post('/api/orders/confirm-stripe', authenticate, async (req: Request, res: R
 
     // Commit to persistent DB and decrement active stock atomically
     const committedOrder = dbService.createOrder(pendingOrder);
+    const invoicedOrder = await generateAndAttachInvoice(committedOrder);
 
     // Free memory
     delete PENDING_STRIPE_ORDERS[orderId];
 
     return res.json({
       success: true,
-      order: committedOrder
+      order: invoicedOrder
     });
   } catch (err: any) {
     console.error('[STRIPE CONFIRM FAILURE]:', err);
@@ -737,6 +929,40 @@ app.post('/api/orders/:id/invoice', authenticate, (req: Request, res: Response) 
   const { invoiceUrl } = req.body;
   dbService.updateOrderInvoice(req.params.id, invoiceUrl);
   res.json({ success: true, invoiceUrl });
+});
+
+app.post('/api/orders/:id/invoice/generate', authenticate, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as User;
+    const order = dbService.getOrders().find(o => o.id === req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (!canAccessOrder(user, order)) return res.status(403).json({ error: 'You cannot access this invoice.' });
+
+    if (order.invoiceUrl) {
+      return res.json({
+        success: true,
+        order,
+        invoiceUrl: order.invoiceUrl,
+        invoiceId: order.invoiceId,
+        reused: true
+      });
+    }
+
+    const updatedOrder = await generateAndAttachInvoice(order, `${req.protocol}://${req.get('host')}`);
+
+    return res.json({
+      success: true,
+      order: updatedOrder,
+      invoiceUrl: updatedOrder.invoiceUrl,
+      invoiceId: updatedOrder.invoiceId,
+      emailStatus: updatedOrder.invoiceEmailStatus,
+      emailError: updatedOrder.invoiceEmailError,
+      reused: false
+    });
+  } catch (error: any) {
+    console.error('[INVOICE GENERATION FAILURE]:', error);
+    return res.status(400).json({ error: error.message || 'Invoice generation failed.' });
+  }
 });
 
 app.post('/api/orders/:id/cancel', authenticate, (req: Request, res: Response) => {
@@ -751,6 +977,12 @@ app.post('/api/orders/:id/cancel', authenticate, (req: Request, res: Response) =
 app.get('/api/orders/:id/invoice', authenticate, (req: Request, res: Response) => {
   const order = dbService.getOrders().find(o => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const user = (req as any).user as User;
+  if (!canAccessOrder(user, order)) return res.status(403).json({ error: 'You cannot access this invoice.' });
+
+  if (order.invoiceUrl) {
+    return res.redirect(order.invoiceUrl);
+  }
 
   // Stream simple markdown/CSV formatted printable contents
   res.setHeader('Content-Type', 'text/plain');
@@ -1017,6 +1249,8 @@ app.post('/api/admin/banners', requireAdmin, (req: Request, res: Response) => {
     image,
     title,
     subtitle,
+    offerText,
+    discount,
     link,
     sponsorName,
     badge,
@@ -1036,6 +1270,8 @@ app.post('/api/admin/banners', requireAdmin, (req: Request, res: Response) => {
     image,
     title,
     subtitle,
+    offerText,
+    discount: Number.isFinite(Number(discount)) && Number(discount) > 0 ? Number(discount) : undefined,
     link,
     sponsorName,
     badge,
@@ -1054,7 +1290,11 @@ app.post('/api/admin/banners', requireAdmin, (req: Request, res: Response) => {
 });
 
 app.put('/api/admin/banners/:id', requireAdmin, (req: Request, res: Response) => {
-  const updated = dbService.updateBanner(req.params.id, req.body);
+  const updates = {
+    ...req.body,
+    ...(req.body.discount !== undefined ? { discount: Number(req.body.discount) || undefined } : {})
+  };
+  const updated = dbService.updateBanner(req.params.id, updates);
   if (!updated) return res.status(404).json({ error: 'Banner not found.' });
   res.json({ success: true, banner: updated });
 });

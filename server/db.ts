@@ -290,6 +290,7 @@ function buildExpandedCatalog(targetCount = 600): Product[] {
   const products = [...defaultProducts];
   const existingIds = new Set(products.map(p => p.id));
   const categoryIds = defaultCategories.map(c => c.id);
+  const offerDiscountCycle = [10, 20, 30, 40, 50, 0, 15, 5, 0, 10, 20, 30, 40, 50, 0];
   let sequence = 1;
 
   while (products.length < targetCount) {
@@ -310,7 +311,7 @@ function buildExpandedCatalog(targetCount = 600): Product[] {
           slug: slugify(productName),
           description: `${seed.brand} ${seed.name.toLowerCase()} prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.`,
           price: Number((seed.price * (1 + (sequence % 9) * 0.035)).toFixed(2)),
-          discount: sequence % 5 === 0 ? 10 : sequence % 7 === 0 ? 15 : sequence % 11 === 0 ? 5 : 0,
+          discount: offerDiscountCycle[sequence % offerDiscountCycle.length],
           stock: 18 + (sequence * 13) % 180,
           image: seed.image,
           categoryId,
@@ -327,6 +328,30 @@ function buildExpandedCatalog(targetCount = 600): Product[] {
   }
 
   return products;
+}
+
+function ensureOfferDiscountProducts() {
+  const offerDiscounts = [10, 20, 30, 40, 50];
+  const minimumPerDiscount = 12;
+  let changed = false;
+
+  for (const discount of offerDiscounts) {
+    const currentCount = db.products.filter(product => product.discount === discount).length;
+    if (currentCount >= minimumPerDiscount) continue;
+
+    const needed = minimumPerDiscount - currentCount;
+    const candidates = db.products
+      .filter(product => product.discount === 0 || product.discount === 5 || product.discount === 15)
+      .slice(0, needed);
+
+    candidates.forEach((product) => {
+      product.discount = discount;
+      product.isFeatured = product.isFeatured || discount >= 40;
+      changed = true;
+    });
+  }
+
+  return changed;
 }
 
 function ensureExpandedCatalog() {
@@ -346,40 +371,210 @@ const defaultCoupons: Coupon[] = [
 
 const defaultBanners: DashboardBanner[] = [
   {
-    id: 'banner-1',
+    id: 'offer-banner-10-grocery',
     image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=1200&auto=format&fit=crop',
-    title: 'Fresh Summer Harvest up to 30% OFF',
-    subtitle: 'Farm-fresh organic mangoes and fresh berries delivered in just 10 minutes!',
+    title: '10% OFF on Grocery Essentials',
+    subtitle: 'Pantry basics, daily vegetables, and home staples with exact 10% savings.',
+    offerText: '10% OFF on Grocery Essentials',
+    discount: 10,
+    active: true,
+    sponsorName: 'NammaShop Essentials',
+    badge: '10% offer',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'Explore Collection',
+    campaignType: 'offer',
+    priority: 1,
+    targetCategoryId: 'cat-staples',
+    category: 'Grocery Essentials',
+    link: '/?offerDiscount=10'
+  },
+  {
+    id: 'offer-banner-10-breakfast',
+    image: 'https://images.unsplash.com/photo-1511690743698-d9d85f2fbf38?q=80&w=1200&auto=format&fit=crop',
+    title: '10% OFF Breakfast Staples',
+    subtitle: 'Milk, eggs, bread, and morning-ready picks filtered by exact 10% discount.',
+    offerText: '10% OFF Breakfast Staples',
+    discount: 10,
+    active: true,
+    sponsorName: 'Morning Market',
+    badge: 'Breakfast deal',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'View Offer',
+    campaignType: 'offer',
+    priority: 2,
+    targetCategoryId: 'cat-dairy-eggs',
+    category: 'Breakfast Staples',
+    link: '/?offerDiscount=10'
+  },
+  {
+    id: 'offer-banner-20-fruits',
+    image: 'https://images.unsplash.com/photo-1619566636858-adf3ef4640b0?q=80&w=1200&auto=format&fit=crop',
+    title: '20% OFF Fresh Fruits',
+    subtitle: 'Seasonal fruit baskets and bright fresh picks with exact 20% savings.',
+    offerText: '20% OFF Fresh Fruits',
+    discount: 20,
+    active: true,
+    sponsorName: 'Namma Farms',
+    badge: '20% offer',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'Explore Collection',
+    campaignType: 'offer',
+    priority: 3,
+    targetCategoryId: 'cat-fruits-veg',
+    category: 'Fresh Fruits',
+    link: '/?offerDiscount=20'
+  },
+  {
+    id: 'offer-banner-20-beverages',
+    image: 'https://images.unsplash.com/photo-1621263764928-df1444c5e859?q=80&w=1200&auto=format&fit=crop',
+    title: '20% OFF Juices & Drinks',
+    subtitle: 'Cold drinks, pressed juices, and refreshers routed to exact 20% discounts.',
+    offerText: '20% OFF Juices & Drinks',
+    discount: 20,
+    active: true,
+    sponsorName: 'Refresh Lane',
+    badge: 'Cool savings',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'View Offer',
+    campaignType: 'offer',
+    priority: 4,
+    targetCategoryId: 'cat-beverages',
+    category: 'Juices & Drinks',
+    link: '/?offerDiscount=20'
+  },
+  {
+    id: 'offer-banner-30-daily',
+    image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=1200&auto=format&fit=crop',
+    title: '30% OFF Daily Essentials',
+    subtitle: 'Farm-fresh organic staples delivered in just 10 minutes!',
+    offerText: '30% OFF Daily Essentials',
+    discount: 30,
     active: true,
     sponsorName: 'Namma Farms',
     badge: 'Seasonal pick',
     ctaLabel: 'Shop Now',
     secondaryCtaLabel: 'Explore Collection',
-    campaignType: 'seasonal',
-    priority: 1,
+    campaignType: 'offer',
+    priority: 5,
     startDate: '2026-05-01T00:00:00.000Z',
     endDate: '2026-08-31T23:59:59.000Z',
     targetCategoryId: 'cat-fruits-veg',
-    link: '/?category=cat-fruits-veg'
+    category: 'Daily Essentials',
+    link: '/?offerDiscount=30'
   },
   {
-    id: 'banner-2',
-    image: 'https://images.unsplash.com/photo-1550583724-b2692b85b150?q=80&w=1200&auto=format&fit=crop',
-    title: 'Dairy Essentials Daily Fresh Assured',
-    subtitle: 'Get morning bread, butter, eggs and milk at discounted wholesale prices.',
+    id: 'offer-banner-30-staples',
+    image: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=1200&auto=format&fit=crop',
+    title: '30% OFF Rice, Atta & Dals',
+    subtitle: 'Stock up on pantry staples mapped to exact 30% offer products.',
+    offerText: '30% OFF Rice, Atta & Dals',
+    discount: 30,
     active: true,
-    sponsorName: 'Arla x NammaShop',
-    badge: 'Sponsored',
-    ctaLabel: 'View Offer',
-    secondaryCtaLabel: 'Shop Now',
-    campaignType: 'sponsored',
-    priority: 2,
+    sponsorName: 'Staples Hub',
+    badge: 'Bulk save',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'Explore Collection',
+    campaignType: 'offer',
+    priority: 6,
     startDate: '2026-05-01T00:00:00.000Z',
     endDate: '2026-12-31T23:59:59.000Z',
-    targetCategoryId: 'cat-dairy-eggs',
-    link: '/?category=cat-dairy-eggs'
+    targetCategoryId: 'cat-staples',
+    category: 'Rice, Atta & Dals',
+    link: '/?offerDiscount=30'
+  },
+  {
+    id: 'offer-banner-40-snacks',
+    image: 'https://images.unsplash.com/photo-1621939514649-280e2ee25f60?q=80&w=1200&auto=format&fit=crop',
+    title: '40% OFF Snacks',
+    subtitle: 'Crisps, biscuits, nuts, and snack packs filtered by exact 40% savings.',
+    offerText: '40% OFF Snacks',
+    discount: 40,
+    active: true,
+    sponsorName: 'Snack Street',
+    badge: '40% offer',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'View Offer',
+    campaignType: 'offer',
+    priority: 7,
+    targetCategoryId: 'cat-snacks-munchies',
+    category: 'Snacks',
+    link: '/?offerDiscount=40'
+  },
+  {
+    id: 'offer-banner-40-family',
+    image: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?q=80&w=1200&auto=format&fit=crop',
+    title: '40% OFF Family Packs',
+    subtitle: 'Large packs and household picks that resolve to exact 40% discounted products.',
+    offerText: '40% OFF Family Packs',
+    discount: 40,
+    active: true,
+    sponsorName: 'Family Basket',
+    badge: 'Family save',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'Explore Collection',
+    campaignType: 'offer',
+    priority: 8,
+    targetCategoryId: 'cat-staples',
+    category: 'Family Packs',
+    link: '/?offerDiscount=40'
+  },
+  {
+    id: 'offer-banner-50-mega',
+    image: 'https://images.unsplash.com/photo-1607082350899-7e105aa886ae?q=80&w=1200&auto=format&fit=crop',
+    title: '50% OFF Mega Deals',
+    subtitle: 'The biggest live savings routed only to exact 50% discount products.',
+    offerText: '50% OFF Mega Deals',
+    discount: 50,
+    active: true,
+    sponsorName: 'Namma Mega Deals',
+    badge: 'Half price',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'View Offer',
+    campaignType: 'offer',
+    priority: 9,
+    targetCategoryId: 'cat-snacks-munchies',
+    category: 'Mega Deals',
+    link: '/?offerDiscount=50'
+  },
+  {
+    id: 'offer-banner-50-weekend',
+    image: 'https://images.unsplash.com/photo-1543168256-418811576931?q=80&w=1200&auto=format&fit=crop',
+    title: '50% OFF Weekend Specials',
+    subtitle: 'Weekend-only grocery picks that open exact 50% discounted shelves.',
+    offerText: '50% OFF Weekend Specials',
+    discount: 50,
+    active: true,
+    sponsorName: 'Weekend Market',
+    badge: 'Mega weekend',
+    ctaLabel: 'Shop Now',
+    secondaryCtaLabel: 'Explore Collection',
+    campaignType: 'offer',
+    priority: 10,
+    targetCategoryId: 'cat-beverages',
+    category: 'Weekend Specials',
+    link: '/?offerDiscount=50'
   }
 ];
+
+function ensureOfferBanners() {
+  const byId = new Map((db.banners || []).map(banner => [banner.id, banner]));
+  let changed = false;
+
+  for (const banner of defaultBanners) {
+    const existing = byId.get(banner.id);
+    if (!existing) {
+      byId.set(banner.id, banner);
+      changed = true;
+    } else {
+      const merged = { ...existing, ...banner };
+      byId.set(banner.id, merged);
+      changed = JSON.stringify(existing) !== JSON.stringify(merged) || changed;
+    }
+  }
+
+  db.banners = Array.from(byId.values()).sort((a, b) => (a.priority || 999) - (b.priority || 999));
+  return changed;
+}
 
 // Helper to save DB to disk
 export function saveDb() {
@@ -451,11 +646,14 @@ export function loadDb() {
       if (!db.categories || db.categories.length === 0) db.categories = defaultCategories;
       if (!db.products || db.products.length === 0) db.products = defaultProducts;
       ensureExpandedCatalog();
+      const offerProductsChanged = ensureOfferDiscountProducts();
       if (!db.orders) db.orders = [];
       if (!db.coupons || db.coupons.length === 0) db.coupons = defaultCoupons;
       if (!db.banners || db.banners.length === 0) db.banners = defaultBanners;
+      const offerBannersChanged = ensureOfferBanners();
       if (!db.reviews) db.reviews = {};
       if (!db.addresses) db.addresses = {};
+      if (offerProductsChanged || offerBannersChanged) saveDb();
     } else {
       // Bootstrap with initial data
       db = {
@@ -537,6 +735,8 @@ export function loadDb() {
         }
       };
       ensureExpandedCatalog();
+      ensureOfferDiscountProducts();
+      ensureOfferBanners();
       saveDb();
     }
   } catch (error) {
@@ -902,13 +1102,16 @@ export const dbService = {
     return null;
   },
 
-  updateOrderInvoice: (orderId: string, invoiceUrl: string) => {
+  updateOrderInvoice: (orderId: string, invoiceUrl: string, metadata: Record<string, any> = {}) => {
     const order = db.orders.find(o => o.id === orderId);
     if (order) {
       (order as any).invoiceUrl = invoiceUrl;
+      Object.assign(order as any, metadata);
       saveDb();
       syncDocToFirestore('orders', orderId, order);
+      return order;
     }
+    return null;
   },
 
   // Review System & Automatic aggregates updates
