@@ -2087,7 +2087,7 @@ export default function App() {
               onClick={() => { setViewMode('catalog'); setSelectedCategoryId(null); }}
               className={`px-3 py-2 rounded-xl transition-all cursor-pointer ${viewMode === 'catalog' ? 'text-[#ff2d2d] bg-red-50 font-bold' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              Shelves Catalog
+              Home
             </button>
 
             {/* Theme Toggle */}
@@ -2247,7 +2247,7 @@ export default function App() {
               className="flex items-center gap-1 text-xs text-emerald-700 font-bold hover:underline cursor-pointer"
             >
               <ChevronLeft size={16} />
-              <span>Back to Grocery Shelves Catalogue</span>
+              <span>Back to Grocery Homeue</span>
             </button>
 
             <div className="flex flex-col lg:flex-row gap-8 items-start">
@@ -2762,17 +2762,7 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  {[
-                    { icon: Clock3, title: 'Delivery promise', desc: 'Slots from 15 minutes with evening and scheduled windows.' },
-                    { icon: ShieldCheck, title: 'Trusted checkout', desc: 'Secure card payments, trusted doorstep delivery, and order tracking.' },
-                    { icon: BadgePercent, title: 'Weekly savings', desc: 'Flash deals, bundle pricing, and personalized recommendations.' }
-                  ].map((item) => (
-                    <div key={item.title} className="rounded-[1.5rem] border border-white/12 bg-white/10 p-4 backdrop-blur-md">
-                      <item.icon size={18} className="mb-3 text-[#ff2d2d]" />
-                      <h3 className="text-sm font-bold">{item.title}</h3>
-                      <p className="mt-1 text-xs leading-5 text-slate-600">{item.desc}</p>
-                    </div>
-                  ))}
+                  {/* Sponsored hero intentionally kept clean and image-first */}
                 </div>
               </div>
             </section>
@@ -2933,7 +2923,7 @@ export default function App() {
             <section id="discount-offers" className="scroll-mt-24 space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-rose-500">{activeOfferDiscount !== null ? 'Banner offer' : 'Discount tab'}</p>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-rose-500">{activeOfferDiscount !== null ? 'Campaign offer' : 'Discount tab'}</p>
                   <h3 className="text-xl font-extrabold text-slate-900">{activeOfferDiscount !== null ? activeOfferTitle || `${activeOfferDiscount}% Off Products` : 'Live Discount Deals'}</h3>
                   <p className="text-sm text-slate-500">
                     {activeOfferDiscount !== null
