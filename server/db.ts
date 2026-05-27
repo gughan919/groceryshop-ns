@@ -9,7 +9,6 @@ const DB_FILE = path.join(DB_DIR, 'db.json');
 // Memory store initialized from disk or default mockup data
 interface DatabaseSchema {
   users: User[];
-  passwords: Record<string, string>; // userEmail -> plain_password
   categories: Category[];
   products: Product[];
   orders: Order[];
@@ -21,7 +20,6 @@ interface DatabaseSchema {
 
 let db: DatabaseSchema = {
   users: [],
-  passwords: {},
   categories: [],
   products: [],
   orders: [],
@@ -638,11 +636,9 @@ export function loadDb() {
       db = JSON.parse(content);
       // Ensure missing tables or arrays are generated
       if (!db.users) db.users = [];
-      if (!db.passwords) db.passwords = {};
       if (!db.users.some(u => u.email === 'nammashopuk@gmail.com')) {
         db.users.push({ id: 'user-nammashopuk-admin', email: 'nammashopuk@gmail.com', name: 'Nammashop UK Admin', role: 'admin' });
       }
-      db.passwords['nammashopuk@gmail.com'] = db.passwords['nammashopuk@gmail.com'] || 'admin123';
       if (!db.categories || db.categories.length === 0) db.categories = defaultCategories;
       if (!db.products || db.products.length === 0) db.products = defaultProducts;
       ensureExpandedCatalog();
@@ -663,12 +659,6 @@ export function loadDb() {
           { id: 'user-owner', email: 'mjjayan2007@gmail.com', name: 'Nammashop Core Owner', role: 'admin' },
           { id: 'user-customer', email: 'customer@nammashop.com', name: 'Rohan Sharma', role: 'customer', phone: '+44 7700 900077' }
         ],
-        passwords: {
-          'admin@nammashop.com': 'admin123',
-          'nammashopuk@gmail.com': 'admin123',
-          'mjjayan2007@gmail.com': 'owner123',
-          'customer@nammashop.com': 'customer123'
-        },
         categories: defaultCategories,
         products: buildExpandedCatalog(600),
         orders: [
@@ -754,7 +744,6 @@ setOnAuthSuccess(() => {
 
 export const dbService = {
   getUsers: () => db.users,
-  getPasswords: () => db.passwords,
   getCategories: () => db.categories,
   getProducts: () => db.products,
   getOrders: () => db.orders,
@@ -764,13 +753,12 @@ export const dbService = {
   getAddressesByUserId: (userId: string) => db.addresses[userId] || [],
 
   // User Actions
-  addUser: (user: User, plainPasswordStr: string) => {
+  addUser: (user: User) => {
     // Check if duplicate
     if (db.users.some(u => u.email === user.email)) {
       throw new Error('User email already exists');
     }
     db.users.push(user);
-    db.passwords[user.email] = plainPasswordStr;
     saveDb();
 
     // Synchronize to Firestore

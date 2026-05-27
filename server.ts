@@ -11,6 +11,7 @@ import { uploadFileToFirebaseStorage } from './server/firebase-server';
 import { GoogleGenAI, Type } from '@google/genai';
 import { User, Address, Product, Category, Order, Coupon, DashboardBanner, Review } from './src/types';
 import Stripe from 'stripe';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 
 const app = express();
 const PORT = 3000;
@@ -176,12 +177,6 @@ async function generateAndAttachInvoice(order: Order, publicBaseUrl = process.en
   }) || order;
 }
 
-// Secure Session Cache (In-Memory for security)
-const SECTOR_SESSIONS: Record<string, User> = {
-  'MOCK-SESSION-ADMIN': { id: 'user-admin', email: 'admin@nammashop.com', name: 'Nammashop Partner Admin', role: 'admin' },
-  'MOCK-SESSION-CUSTOMER': { id: 'user-customer', email: 'customer@nammashop.com', name: 'Rohan Sharma', role: 'customer', phone: '+91 9876543210' }
-};
-
 const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
 
 function isAdminEmail(email?: string) {
@@ -189,32 +184,44 @@ function isAdminEmail(email?: string) {
   return !!cleaned && (ADMIN_EMAILS.has(cleaned) || cleaned.endsWith('@nammashop.com'));
 }
 
-function createPersistentSessionToken(user: User) {
-  return `SESSION-PERSIST-${user.id}`;
-}
-
-function resolveUserFromPersistentToken(token: string) {
-  if (!token.startsWith('SESSION-PERSIST-')) return null;
-  const userId = token.replace('SESSION-PERSIST-', '');
-  return dbService.getUsers().find(u => u.id === userId) || null;
-}
-
 // Middleware: Authenticate User Session
-function authenticate(req: Request, res: Response, next: any) {
+async function authenticate(req: Request, res: Response, next: any) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
-    return res.status(419).json({ error: 'Authorization header is missing. Please sign in.' });
+    return res.status(401).json({ error: 'Authorization header is missing. Please sign in.' });
   }
-  const token = authHeader.replace('Bearer ', '').trim();
-  const user = SECTOR_SESSIONS[token] || resolveUserFromPersistentToken(token);
-  if (!user) {
-    return res.status(419).json({ error: 'Invalid or expired session. Please sign in.' });
+  const idToken = authHeader.replace('Bearer ', '').trim();
+  try {
+    const decoded = await getAdminAuth().verifyIdToken(idToken, true);
+    const cleanedEmail = (decoded.email || '').toLowerCase().trim();
+    if (!cleanedEmail) return res.status(401).json({ error: 'Authenticated user email not available.' });
+    let user = dbService.getUsers().find(u => u.id === decoded.uid || u.email === cleanedEmail) || null;
+    const assignedRole = isAdminEmail(cleanedEmail) ? 'admin' : 'customer';
+    if (!user) {
+      user = {
+        id: decoded.uid,
+        email: cleanedEmail,
+        name: decoded.name || cleanedEmail.split('@')[0],
+        role: assignedRole,
+        phone: decoded.phone_number || '',
+        avatar: decoded.picture || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(cleanedEmail)}`
+      };
+      dbService.addUser(user);
+    } else {
+      const patch: Partial<User> = {};
+      if (user.role !== 'admin') patch.role = assignedRole;
+      if (decoded.name && decoded.name !== user.name) patch.name = decoded.name;
+      if (decoded.picture && decoded.picture !== user.avatar) patch.avatar = decoded.picture;
+      if (decoded.phone_number && decoded.phone_number !== user.phone) patch.phone = decoded.phone_number;
+      if (Object.keys(patch).length > 0) dbService.updateUser(user.id, patch);
+      user = { ...user, ...patch };
+    }
+    if (user.isBanned) return res.status(403).json({ error: 'This account has been suspended due to policy infringement.' });
+    (req as any).user = user;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid or expired Firebase session. Please sign in again.' });
   }
-  if (user.isBanned) {
-    return res.status(403).json({ error: 'This account has been suspended due to policy infringement.' });
-  }
-  (req as any).user = user;
-  next();
 }
 
 // Middleware: Validate Admin Permissions
@@ -238,74 +245,8 @@ console.log('[DEBUG] Bootstrapping Nammashop transactional engine...');
 // OTP Store for email validation
 const activeOtps: Record<string, string> = {};
 
-app.post('/api/auth/register', (req: Request, res: Response) => {
-  try {
-    const { name, email, password, phone } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Missing mandatory parameters.' });
-    }
-
-    const cleanedEmail = email.toLowerCase().trim();
-    // Pre-allocate admin role if matches criteria
-    const isPredefinedAdmin = isAdminEmail(cleanedEmail);
-    const role = isPredefinedAdmin ? 'admin' : 'customer';
-
-    const userId = 'user-' + Math.random().toString(36).substring(2, 11);
-    const newUser: User = {
-      id: userId,
-      email: cleanedEmail,
-      name,
-      role,
-      phone,
-      avatar: `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(name)}`
-    };
-
-    dbService.addUser(newUser, password);
-    
-    const sessionToken = createPersistentSessionToken(newUser);
-    SECTOR_SESSIONS[sessionToken] = newUser;
-
-    res.json({
-      success: true,
-      message: 'Account initiated successfully. Verify your e-mail through Firebase Authentication.',
-      user: newUser,
-      token: sessionToken
-    });
-  } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Operation aborted.' });
-  }
-});
-
-app.post('/api/auth/login', (req: Request, res: Response) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'E-mail and password credentials are required.' });
-  }
-
-  const cleanedEmail = email.toLowerCase().trim();
-  const users = dbService.getUsers();
-  const passwords = dbService.getPasswords();
-
-  const user = users.find(u => u.email === cleanedEmail);
-  const correctPassword = passwords[cleanedEmail];
-
-  if (!user || correctPassword !== password) {
-    return res.status(401).json({ error: 'Invalid e-mail or password credentials.' });
-  }
-
-  if (user.isBanned) {
-    return res.status(403).json({ error: 'This account has been suspended.' });
-  }
-
-  const sessionToken = createPersistentSessionToken(user);
-  SECTOR_SESSIONS[sessionToken] = user;
-
-  res.json({
-    success: true,
-    user,
-    token: sessionToken
-  });
-});
+app.post('/api/auth/register', (_req: Request, res: Response) => res.status(410).json({ error: 'Use Firebase Authentication createUserWithEmailAndPassword on client.' }));
+app.post('/api/auth/login', (_req: Request, res: Response) => res.status(410).json({ error: 'Use Firebase Authentication signInWithEmailAndPassword on client.' }));
 
 app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
   const { email, otp } = req.body;
@@ -320,50 +261,8 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
   res.status(400).json({ error: 'Invalid or expired OTP. Please try again.' });
 });
 
-app.post('/api/auth/firebase-sync', (req: Request, res: Response) => {
-  const { uid, email, name, avatar, phone, role } = req.body;
-  if (!uid || !email) {
-    return res.status(400).json({ error: 'Missing Firebase uid or email details.' });
-  }
-
-  const cleanedEmail = email.toLowerCase().trim();
-  const isPredefinedAdmin = isAdminEmail(cleanedEmail) || role === 'admin';
-  const assignedRole = isPredefinedAdmin ? 'admin' : 'customer';
-
-  // Retrieve existing user if exists
-  const existingUsers = dbService.getUsers();
-  let existingUser = existingUsers.find(u => u.id === uid || u.email === cleanedEmail);
-
-  if (existingUser) {
-    // Keep original roles if administrator or sync updates
-    if (existingUser.role !== 'admin') {
-      existingUser.role = assignedRole;
-    }
-    existingUser.name = name || existingUser.name;
-    existingUser.avatar = avatar || existingUser.avatar;
-    existingUser.phone = phone || existingUser.phone || '';
-    dbService.updateUser(existingUser.id, existingUser);
-  } else {
-    existingUser = {
-      id: uid,
-      email: cleanedEmail,
-      name: name || cleanedEmail.split('@')[0],
-      role: assignedRole,
-      phone: phone || '',
-      avatar: avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(name || cleanedEmail)}`
-    };
-    dbService.addUser(existingUser, 'firebase-shared-secret-auth-password');
-  }
-
-  // Create real active session token for the server's request context
-  const sessionToken = createPersistentSessionToken(existingUser);
-  SECTOR_SESSIONS[sessionToken] = existingUser;
-
-  res.json({
-    success: true,
-    user: existingUser,
-    token: sessionToken
-  });
+app.post('/api/auth/firebase-sync', authenticate, (req: Request, res: Response) => {
+  res.json({ success: true, user: (req as any).user });
 });
 
 app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
@@ -373,63 +272,10 @@ app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
 });
 
 app.post('/api/auth/reset-password', (req: Request, res: Response) => {
-  const { email, otp, newPassword } = req.body;
-  if (!email || !otp || !newPassword) {
-    return res.status(400).json({ error: 'All fields (email, otp, newPassword) must be supplied.' });
-  }
-
-  const cleaned = email.toLowerCase().trim();
-  const expectedOtp = activeOtps[cleaned];
-
-  if (otp === expectedOtp) {
-    delete activeOtps[cleaned];
-    const passwords = dbService.getPasswords();
-    passwords[cleaned] = newPassword;
-    saveDb();
-    return res.json({ success: true, message: 'Password recovery resetting completed. Try login.' });
-  }
-  res.status(400).json({ error: 'Invalid password recovery token.' });
+  return res.status(410).json({ error: 'Password reset is managed by Firebase Authentication only.' });
 });
 
-app.post('/api/auth/google', (req: Request, res: Response) => {
-  const { name, email, googleId, avatar } = req.body;
-  if (!email || !name) {
-    return res.status(400).json({ error: 'Google login payload error.' });
-  }
-
-  const cleanedEmail = email.toLowerCase().trim();
-  // Auto admin match for admin
-  const isPredefinedAdmin = isAdminEmail(cleanedEmail);
-  const role = isPredefinedAdmin ? 'admin' : 'customer';
-
-  const users = dbService.getUsers();
-  let existingUser = users.find(u => u.email === cleanedEmail);
-
-  if (!existingUser) {
-    const userId = 'user-google-' + Math.random().toString(36).substring(2, 10);
-    existingUser = {
-      id: userId,
-      email: cleanedEmail,
-      name,
-      role,
-      avatar: avatar || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(name)}`
-    };
-    dbService.addUser(existingUser, 'google-' + Math.random().toString());
-  }
-
-  if (existingUser.isBanned) {
-    return res.status(403).json({ error: 'Account suspended.' });
-  }
-
-  const sessionToken = createPersistentSessionToken(existingUser);
-  SECTOR_SESSIONS[sessionToken] = existingUser;
-
-  res.json({
-    success: true,
-    user: existingUser,
-    token: sessionToken
-  });
-});
+app.post('/api/auth/google', (_req: Request, res: Response) => res.status(410).json({ error: 'Use Firebase GoogleAuthProvider on client.' }));
 
 app.get('/api/auth/me', authenticate, (req: Request, res: Response) => {
   res.json({
@@ -458,12 +304,6 @@ app.put('/api/auth/profile', authenticate, (req: Request, res: Response) => {
     if (walletBalance !== undefined) updates.walletBalance = walletBalance;
 
     dbService.updateUser(user.id, updates);
-
-    // Sync active session inside the server memory
-    const matchedTokenKeys = Object.keys(SECTOR_SESSIONS).filter(k => SECTOR_SESSIONS[k].id === user.id);
-    matchedTokenKeys.forEach(k => {
-      SECTOR_SESSIONS[k] = { ...SECTOR_SESSIONS[k], ...updates };
-    });
 
     res.json({
       success: true,

@@ -187,7 +187,9 @@ export default function App() {
       console.warn('URL parsing for auto-token failed', e);
     }
     try {
-      return localStorage.getItem('nammashop_token');
+      const raw = localStorage.getItem('nammashop_token');
+      if (!raw) return null;
+      return raw.split('.').length === 3 ? raw : null;
     } catch {
       return null;
     }
@@ -593,8 +595,19 @@ export default function App() {
 
   const getFriendlyAuthError = (error: any) => {
     console.error('Auth error:', error);
+    const code = error?.code || '';
+    const message = error?.message || '';
     if (error.code === 'auth/operation-not-allowed') {
       return 'The requested sign-in method is currently disabled. Please contact the administrator to enable it in the Firebase Console.';
+    }
+    if (code === 'auth/unauthorized-domain' || code === 'auth/app-not-authorized') {
+      return 'This domain is not authorized in Firebase Authentication. Add this exact domain in Firebase Console > Authentication > Settings > Authorized domains.';
+    }
+    if (code === 'auth/invalid-api-key' || code === 'auth/configuration-not-found') {
+      return 'Firebase configuration is invalid or incomplete for this deployment. Verify API key, auth domain, and enabled providers.';
+    }
+    if (code === 'auth/network-request-failed') {
+      return 'Network connection to Firebase failed. Check internet access, ad blockers, VPN, or firewall settings.';
     }
     if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
       return 'Incorrect email or password.';
@@ -602,8 +615,13 @@ export default function App() {
     if (error.code === 'auth/email-already-in-use') {
       return 'An account with this email already exists.';
     }
+    if (message && message.length < 180) {
+      return message;
+    }
     return 'Authentication service is currently unavailable. Please try again later.';
   };
+  const normalizeAuthEmail = (value: string) => value.trim().toLowerCase();
+  const isLikelyFirebaseJwt = (value: string) => value.split('.').length === 3;
 
   useEffect(() => {
     localStorage.setItem('nammashop_viewMode', viewMode);
@@ -636,22 +654,21 @@ export default function App() {
       if (cancelled) return;
       if (firebaseUser) {
         try {
+          const firebaseToken = await firebaseUser.getIdToken();
           const resp = await fetch('/api/auth/firebase-sync', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Nammashop User',
-              avatar: firebaseUser.photoURL || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`
-            })
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${firebaseToken}`
+            },
+            body: JSON.stringify({})
           });
           const data = await resp.json();
           if (resp.ok && data.success) {
-            localStorage.setItem('nammashop_token', data.token);
-            setToken(data.token);
+            localStorage.setItem('nammashop_token', firebaseToken);
+            setToken(firebaseToken);
             setCurrentUser(data.user);
-            fetchCustomerData(data.token);
+            fetchCustomerData(firebaseToken);
             setAuthInitialized(true);
           }
         } catch (e) {
@@ -1190,11 +1207,12 @@ export default function App() {
       
       try {
         // Try Real Firebase Auth registration first
-        const userCredential = await createUserWithEmailAndPassword(firebaseAuth, authForm.email, authForm.password);
+        const cleanedEmail = normalizeAuthEmail(authForm.email);
+        const userCredential = await createUserWithEmailAndPassword(firebaseAuth, cleanedEmail, String(authForm.password || ''));
         if (userCredential.user) {
           uid = userCredential.user.uid;
           await sendEmailVerification(userCredential.user);
-          notifyUser(`Account registered! A verification email has been sent to ${authForm.email}`, 'success');
+          notifyUser(`Account registered! A verification email has been sent to ${cleanedEmail}`, 'success');
         }
       } catch (fbErr: any) {
         console.error('Firebase Auth registration failed:', fbErr);
@@ -1272,66 +1290,18 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      let uid = '';
-      let authenticatedEmail = authForm.email;
-      let authenticatedName = '';
-      
-      let firebaseAuthSucceeded = false;
-      try {
-        setAuthError(null);
-        await setPersistence(firebaseAuth, browserLocalPersistence);
-        const userCredential = await signInWithEmailAndPassword(firebaseAuth, authForm.email, authForm.password);
-        if (userCredential.user) {
-          uid = userCredential.user.uid;
-          authenticatedEmail = userCredential.user.email || authForm.email;
-          authenticatedName = userCredential.user.displayName || '';
-
-          if (!userCredential.user.emailVerified) {
-            if (ADMIN_EMAILS.has(authForm.email.toLowerCase().trim())) {
-              await signOut(firebaseAuth);
-              firebaseAuthSucceeded = false;
-            } else {
-            setAuthError("Email is not verified. Please check your inbox or spam folder.");
-            notifyUser("Access Denied: Please verify your email first.", 'error');
-            await signOut(firebaseAuth);
-            return;
-            }
-          } else {
-            firebaseAuthSucceeded = true;
-          }
-        }
-      } catch (fbErr: any) {
-        console.warn('Firebase Auth login failed, attempting direct backend fallback:', fbErr.code);
-        firebaseAuthSucceeded = false;
+      setAuthError(null);
+      await setPersistence(firebaseAuth, browserLocalPersistence);
+      const cleanedEmail = normalizeAuthEmail(authForm.email);
+      const userCredential = await signInWithEmailAndPassword(firebaseAuth, cleanedEmail, String(authForm.password || ''));
+      if (!userCredential.user.emailVerified && !ADMIN_EMAILS.has(cleanedEmail)) {
+        setAuthError("Email is not verified. Please check your inbox or spam folder.");
+        notifyUser("Access Denied: Please verify your email first.", 'error');
+        await signOut(firebaseAuth);
+        return;
       }
-
-      // Synchronize session token with Express (if Firebase succeeded, or attempt direct backend login)
-      const loginPayload = firebaseAuthSucceeded 
-        ? { uid, email: authenticatedEmail, name: authenticatedName }
-        : { email: authForm.email, password: authForm.password }; // Direct login payload
-
-      const resp = await fetch(firebaseAuthSucceeded ? '/api/auth/firebase-sync' : '/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loginPayload)
-      });
-      const data = await resp.json();
-      
-      if (resp.ok) {
-        localStorage.setItem('nammashop_token', data.token);
-        setToken(data.token);
-        setCurrentUser(data.user);
-        setAuthInitialized(true);
-        notifyUser(`Welcome back to Nammashop, ${data.user.name}! 🚀`, 'success');
-        setAuthMode(null);
-        setViewMode(data.user.role === 'admin' ? 'admin' : 'catalog');
-      } else {
-        const message = firebaseAuthSucceeded
-          ? data.error || 'Authentication synchronization failed.'
-          : data.error || 'Invalid e-mail or password credentials.';
-        notifyUser(message, 'error');
-        setAuthError(message);
-      }
+      notifyUser('Welcome back to Nammashop! 🚀', 'success');
+      setAuthMode(null);
     } catch (err: any) {
         notifyUser(getFriendlyAuthError(err), 'error');
         setAuthError(getFriendlyAuthError(err));
@@ -1347,61 +1317,26 @@ export default function App() {
 
       const resp = await fetch('/api/auth/firebase-sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          name: firebaseUser.displayName || 'Google User',
-          avatar: firebaseUser.photoURL || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await firebaseUser.getIdToken()}`
+        },
+        body: JSON.stringify({})
       });
       const data = await resp.json();
       if (resp.ok) {
-        localStorage.setItem('nammashop_token', data.token);
-        setToken(data.token);
+        const idToken = await firebaseUser.getIdToken();
+        localStorage.setItem('nammashop_token', idToken);
+        setToken(idToken);
         setCurrentUser(data.user);
         notifyUser(`Google Auth verified! Welcome ${data.user.name} 🌱`, 'success');
         setAuthMode(null);
         setViewMode(data.user.role === 'admin' ? 'admin' : 'catalog');
       }
     } catch (fbErr: any) {
-      console.error('Google Popup login failed, attempting backend Google fallback:', fbErr);
-      const fallbackEmail = authForm.email.trim().toLowerCase();
-      if (!fallbackEmail) {
-        const message = 'Enter your Google e-mail address above, then press Google sign-on again.';
-        setAuthError(message);
-        notifyUser(message, 'error');
-        return;
-      }
-
-      try {
-        const resp = await fetch('/api/auth/google', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: fallbackEmail,
-            name: fallbackEmail.split('@')[0] || 'Google User',
-            googleId: `fallback-${fallbackEmail}`,
-            avatar: `https://api.dicebear.com/7.x/pixel-art/svg?seed=${encodeURIComponent(fallbackEmail)}`
-          })
-        });
-        const data = await resp.json();
-        if (resp.ok) {
-          localStorage.setItem('nammashop_token', data.token);
-          setToken(data.token);
-          setCurrentUser(data.user);
-          notifyUser(`Google account connected. Welcome ${data.user.name}!`, 'success');
-          setAuthMode(null);
-          setViewMode(data.user.role === 'admin' ? 'admin' : 'catalog');
-        } else {
-          setAuthError(data.error || 'Google sign-on failed.');
-          notifyUser(data.error || 'Google sign-on failed.', 'error');
-        }
-      } catch (fallbackErr: any) {
-        const message = fallbackErr?.message || getFriendlyAuthError(fbErr);
-        setAuthError(message);
-        notifyUser(message, 'error');
-      }
+      const message = getFriendlyAuthError(fbErr);
+      setAuthError(message);
+      notifyUser(message, 'error');
     }
   };
 
