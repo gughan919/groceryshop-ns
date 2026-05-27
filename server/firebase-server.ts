@@ -1,5 +1,6 @@
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 import fs from 'fs';
 import path from 'path';
 
@@ -24,6 +25,7 @@ export function getFirebaseServerDb() {
     if (apps.length === 0) {
       app = initializeApp({
         projectId: firebaseConfig.projectId,
+        storageBucket: firebaseConfig.storageBucket,
       });
     } else {
       app = apps[0];
@@ -42,6 +44,30 @@ export function getFirebaseServerDb() {
     return db;
   } catch (error) {
     console.error('[SERVER-FIREBASE] Admin SDK Initialization failed. Falling back to local db mode.', error);
+    return null;
+  }
+}
+
+export async function uploadFileToFirebaseStorage(localPath: string, destination: string, contentType: string) {
+  const fdb = getFirebaseServerDb();
+  if (!fdb || isSyncDisabled) return null;
+
+  try {
+    const bucket = getStorage().bucket();
+    const [file] = await bucket.upload(localPath, {
+      destination,
+      metadata: {
+        contentType,
+        cacheControl: 'private, max-age=31536000',
+      },
+    });
+    const [signedUrl] = await file.getSignedUrl({
+      action: 'read',
+      expires: '2036-01-01',
+    });
+    return signedUrl;
+  } catch (error) {
+    console.warn('[SERVER-FIREBASE] Invoice upload to Firebase Storage failed. Using local persistent invoice URL.', error);
     return null;
   }
 }
