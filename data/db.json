@@ -46,6 +46,13 @@
       "name": "gughan4912",
       "role": "customer",
       "avatar": "https://api.dicebear.com/7.x/pixel-art/svg?seed=gughan4912%40gmail.com"
+    },
+    {
+      "id": "user-google-w4evn4xt",
+      "email": "22i316@psgtech.ac.in",
+      "name": "22i316",
+      "role": "customer",
+      "avatar": "https://api.dicebear.com/7.x/pixel-art/svg?seed=22i316%40psgtech.ac.in"
     }
   ],
   "passwords": {
@@ -55,7 +62,8 @@
     "testuser1779778837@example.com": "Test@12345",
     "nammashopuk@gmail.com": "admin123",
     "gughan4912@gmail": "google-0.699120789517806",
-    "gughan4912@gmail.com": "google-0.302700773973692"
+    "gughan4912@gmail.com": "google-0.302700773973692",
+    "22i316@psgtech.ac.in": "google-0.6582334638991332"
   },
   "categories": [
     {
@@ -10259,6 +10267,48 @@
         "state": "dugdhoguhosdh",
         "pincode": "560034",
         "phone": "+919876543215"
+      }
+    ],
+    "user-google-w4evn4xt": [
+      {
+        "id": "addr-bz3qdk4",
+        "label": "Home",
+        "fullName": "william",
+        "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
+        "city": "coimbatore",
+        "state": "Tamil Nadu",
+        "pincode": "641037",
+        "phone": "9629306611"
+      },
+      {
+        "id": "addr-3s6wnmg",
+        "label": "Home",
+        "fullName": "william",
+        "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
+        "city": "coimbatore",
+        "state": "Tamil Nadu",
+        "pincode": "641037",
+        "phone": "9629306611"
+      },
+      {
+        "id": "addr-wz7y4g0",
+        "label": "Home",
+        "fullName": "willis",
+        "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
+        "city": "coimbatore",
+        "state": "Tamil Nadu",
+        "pincode": "641037",
+        "phone": "9629306611"
+      },
+      {
+        "id": "addr-qqr5qvn",
+        "label": "Home",
+        "fullName": "willis",
+        "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
+        "city": "coimbatore",
+        "state": "Tamil Nadu",
+        "pincode": "641037",
+        "phone": "9629306611"
       }
     ]
   }

@@ -265,12 +265,13 @@ export default function App() {
   const [selectedDiscountFilter, setSelectedDiscountFilter] = useState<DiscountFilterId>('10');
   const [activeOfferDiscount, setActiveOfferDiscount] = useState<number | null>(null);
   const [activeOfferTitle, setActiveOfferTitle] = useState<string>('');
+  const [activeCampaignBannerId, setActiveCampaignBannerId] = useState<string | null>(null);
   const [discountPage, setDiscountPage] = useState(1);
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<'catalog' | 'checkout' | 'profile' | 'admin' | 'ai' | 'success'>(() => {
+  const [viewMode, setViewMode] = useState<'catalog' | 'checkout' | 'profile' | 'admin' | 'ai' | 'success' | 'sponsored'>(() => {
     try {
       const saved = localStorage.getItem('nammashop_viewMode');
-      if (saved === 'success' || saved === 'checkout' || saved === 'profile' || saved === 'ai' || saved === 'admin') {
+      if (saved === 'success' || saved === 'checkout' || saved === 'profile' || saved === 'ai' || saved === 'admin' || saved === 'sponsored') {
         return saved as any;
       }
     } catch {}
@@ -339,6 +340,7 @@ export default function App() {
 
   // Banner slide index
   const [bannerIndex, setBannerIndex] = useState(0);
+  const [bannerTouchStartX, setBannerTouchStartX] = useState<number | null>(null);
   const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem('nammashop_recently_viewed') || '[]');
@@ -351,6 +353,8 @@ export default function App() {
   const whatsappSupportNumber = '447700900123';
   const activeBanner = banners[bannerIndex];
   const activeBannerDiscount = getBannerDiscount(activeBanner);
+  const activeCampaignBanner = banners.find((banner) => banner.id === activeCampaignBannerId) || activeBanner || banners[0] || null;
+  const activeCampaignDiscount = getBannerDiscount(activeCampaignBanner);
   const offerFallbackImage = activeBanner?.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=800&auto=format&fit=crop';
   const recentlyViewedProducts = recentlyViewedIds
     .map((id) => products.find((product) => product.id === id))
@@ -379,6 +383,28 @@ export default function App() {
     const matching = products.filter((product) => productMatchesDiscountFilter(product, selectedDiscountFilter));
     return sortProducts(matching, selectedDiscountFilter === 'best' ? 'discount' : sortOption);
   }, [activeOfferDiscount, offerProducts, products, selectedDiscountFilter, sortOption]);
+  const sponsoredCampaignProducts = useMemo(() => {
+    if (!activeCampaignBanner) return sortProducts(products.filter((product) => getEffectiveDiscount(product) > 0 || product.isFeatured), sortOption).slice(0, 24);
+    const bannerDiscount = getBannerDiscount(activeCampaignBanner);
+    const bannerText = [
+      activeCampaignBanner.title,
+      activeCampaignBanner.subtitle,
+      activeCampaignBanner.offerText,
+      activeCampaignBanner.sponsorName,
+      activeCampaignBanner.badge
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    const campaignProducts = products.filter((product) => {
+      const productText = [product.name, product.brand, product.description].filter(Boolean).join(' ').toLowerCase();
+      const categoryMatch = activeCampaignBanner.targetCategoryId && product.categoryId === activeCampaignBanner.targetCategoryId;
+      const discountMatch = bannerDiscount ? getEffectiveDiscount(product) === bannerDiscount : getEffectiveDiscount(product) > 0;
+      const textMatch = bannerText && bannerText.split(/\s+/).some((word) => word.length > 3 && productText.includes(word));
+      return categoryMatch || discountMatch || textMatch || product.isFeatured;
+    });
+
+    const fallbackProducts = products.filter((product) => getEffectiveDiscount(product) > 0 || product.isFeatured);
+    return sortProducts(campaignProducts.length ? campaignProducts : fallbackProducts, sortOption).slice(0, 30);
+  }, [activeCampaignBanner, products, sortOption]);
   const availableBrands = useMemo(() => {
     return Array.from(new Set(products.map((product) => product.brand).filter(Boolean) as string[])).sort();
   }, [products]);
@@ -416,6 +442,18 @@ export default function App() {
     .sort((a, b) => b.stock - a.stock)
     .slice(0, 8);
   const weeklyPopularProducts = [...bestSellerProducts].slice(0, 8);
+  const indianBrands = [
+    { name: 'Aashirvaad', tone: 'bg-orange-50 text-orange-700 border-orange-100' },
+    { name: 'MDH', tone: 'bg-red-50 text-red-700 border-red-100' },
+    { name: 'MTR', tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+    { name: 'Amul', tone: 'bg-blue-50 text-blue-700 border-blue-100' },
+    { name: 'Parle', tone: 'bg-yellow-50 text-yellow-700 border-yellow-100' },
+    { name: 'Haldiram', tone: 'bg-rose-50 text-rose-700 border-rose-100' },
+    { name: 'Britannia', tone: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
+    { name: 'Tata', tone: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
+    { name: 'Priya', tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    { name: 'Annapoorna', tone: 'bg-lime-50 text-lime-700 border-lime-100' }
+  ];
 
   useEffect(() => {
     localStorage.setItem('nammashop_recently_viewed', JSON.stringify(recentlyViewedIds));
@@ -428,7 +466,8 @@ export default function App() {
       profile: 'Your account | NammaShop UK',
       admin: 'Admin console | NammaShop',
       ai: 'AI kitchen assistant | NammaShop UK',
-      success: 'Order confirmed | NammaShop UK'
+      success: 'Order confirmed | NammaShop UK',
+      sponsored: 'Sponsored grocery campaign | NammaShop UK'
     };
     document.title = titleByViewMode[viewMode];
 
@@ -442,7 +481,7 @@ export default function App() {
       element.content = content;
     };
 
-    upsertMeta('description', 'Premium UK grocery delivery with fast checkout, curated shelves, and trusted doorstep delivery.', 'name');
+    upsertMeta('description', 'Premium UK grocery delivery with fast checkout, curated home browsing, and trusted doorstep delivery.', 'name');
     upsertMeta('og:title', document.title, 'property');
     upsertMeta('og:description', 'Discover fresh produce, pantry staples, and premium grocery deals with NammaShop UK.', 'property');
   }, [viewMode]);
@@ -506,18 +545,26 @@ export default function App() {
   };
 
   const handleBannerNavigate = (banner: DashboardBanner, fallbackCategoryId?: string | null) => {
-    const discount = getBannerDiscount(banner);
-    if (discount && routeToOfferDiscount(discount, banner.offerText || banner.title)) {
-      return;
-    }
-    if (fallbackCategoryId) {
-      setSelectedCategoryId(fallbackCategoryId);
-      setViewMode('catalog');
-      return;
-    }
+    setActiveCampaignBannerId(banner.id);
+    setSelectedCategoryId(fallbackCategoryId || banner.targetCategoryId || null);
+    setDiscountPage(1);
+    setViewMode('sponsored');
+    window.history.pushState({}, '', `/?campaign=${encodeURIComponent(banner.id)}`);
+  };
+
+  const handleCampaignBackHome = () => {
+    setViewMode('catalog');
+    setActiveCampaignBannerId(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('campaign');
+    window.history.pushState({}, '', params.toString() ? `/?${params.toString()}` : '/');
+  };
+
+  const openCampaignCategory = (banner: DashboardBanner) => {
     if (banner.targetCategoryId) {
       setSelectedCategoryId(banner.targetCategoryId);
       setViewMode('catalog');
+      window.history.pushState({}, '', `/?category=${encodeURIComponent(banner.targetCategoryId)}`);
       return;
     }
     if (banner.link?.startsWith('/')) {
@@ -529,6 +576,8 @@ export default function App() {
         return;
       } catch {}
     }
+    const discount = getBannerDiscount(banner);
+    if (discount && routeToOfferDiscount(discount, banner.offerText || banner.title)) return;
     if (banner.link) {
       window.open(banner.link, '_blank', 'noopener,noreferrer');
     }
@@ -903,6 +952,21 @@ export default function App() {
     syncOfferRoute();
     window.addEventListener('popstate', syncOfferRoute);
     return () => window.removeEventListener('popstate', syncOfferRoute);
+  }, []);
+
+  useEffect(() => {
+    const syncCampaignRoute = () => {
+      const params = new URLSearchParams(window.location.search);
+      const campaignId = params.get('campaign');
+      if (campaignId) {
+        setActiveCampaignBannerId(campaignId);
+        setViewMode('sponsored');
+      }
+    };
+
+    syncCampaignRoute();
+    window.addEventListener('popstate', syncCampaignRoute);
+    return () => window.removeEventListener('popstate', syncCampaignRoute);
   }, []);
 
   useEffect(() => {
@@ -2241,13 +2305,13 @@ export default function App() {
         {/* VIEW 2: CHECKOUT BILLING SHEET */}
         {viewMode === 'checkout' && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            {/* Back to shelves navigation */}
+            {/* Back to home navigation */}
             <button
               onClick={() => setViewMode('catalog')}
               className="flex items-center gap-1 text-xs text-emerald-700 font-bold hover:underline cursor-pointer"
             >
               <ChevronLeft size={16} />
-              <span>Back to Grocery Homeue</span>
+              <span>Back to Home</span>
             </button>
 
             <div className="flex flex-col lg:flex-row gap-8 items-start">
@@ -2652,7 +2716,117 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 4: DEFAULT HOMEPAGE HERO & PRODUCT SHELVES CATALOGS */}
+        {/* VIEW 3.7: SPONSORED CAMPAIGN PRODUCTS */}
+        {viewMode === 'sponsored' && (
+          <div className="space-y-5 animate-in fade-in duration-200">
+            <button
+              onClick={handleCampaignBackHome}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <ArrowLeft size={14} />
+              <span>Home</span>
+            </button>
+
+            <section className="relative overflow-hidden rounded-[1.6rem] border border-slate-200 bg-slate-950 text-white shadow-[0_28px_80px_-38px_rgba(15,23,42,0.45)] sm:rounded-[2rem]">
+              {activeCampaignBanner?.image && (
+                <img
+                  src={activeCampaignBanner.image}
+                  alt={activeCampaignBanner.title}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              )}
+              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(15,23,42,0.9),rgba(15,23,42,0.62)_58%,rgba(15,23,42,0.28))]" />
+              <div className="relative p-5 sm:p-8">
+                <div className="max-w-3xl space-y-4">
+                  <div className="flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-white/80">
+                    <span className="rounded-full border border-white/25 bg-white/16 px-3 py-1 backdrop-blur">{activeCampaignBanner?.badge || 'Sponsored'}</span>
+                    <span className="rounded-full border border-white/20 bg-black/20 px-3 py-1 backdrop-blur">{activeCampaignBanner?.sponsorName || 'NammaShop partner'}</span>
+                    {activeCampaignDiscount !== null && <span className="rounded-full bg-[#ff2d2d] px-3 py-1 text-white">{activeCampaignDiscount}% off</span>}
+                  </div>
+                  <h2 className="font-['Fraunces'] text-3xl leading-tight sm:text-5xl">
+                    {activeCampaignBanner?.title || 'Sponsored grocery campaign'}
+                  </h2>
+                  <p className="max-w-xl text-sm leading-6 text-white/82">
+                    {activeCampaignBanner?.offerText || activeCampaignBanner?.subtitle || 'Explore promoted products, active discounts, and fresh campaign picks.'}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {activeCampaignBanner && (
+                      <button
+                        onClick={() => openCampaignCategory(activeCampaignBanner)}
+                        className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-slate-100"
+                      >
+                        {activeCampaignBanner.secondaryCtaLabel || 'View linked shelf'}
+                      </button>
+                    )}
+                    <span className="rounded-2xl border border-white/20 bg-white/12 px-4 py-3 text-xs font-bold text-white backdrop-blur">
+                      {sponsoredCampaignProducts.length} campaign products
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[1.6rem] border border-white/70 bg-[rgba(255,255,255,0.82)] p-4 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.35)] backdrop-blur-xl sm:p-5">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-[#ff2d2d]">Sponsored products</p>
+                  <h3 className="text-xl font-extrabold text-slate-900">Campaign picks and offers</h3>
+                </div>
+                <select
+                  value={sortOption}
+                  onChange={(e) => setSortOption(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 outline-none sm:w-auto"
+                >
+                  <option value="featured">Featured first</option>
+                  <option value="discount">Biggest discounts</option>
+                  <option value="price-low">Price: low to high</option>
+                  <option value="price-high">Price: high to low</option>
+                  <option value="rating">Top rated</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {sponsoredCampaignProducts.map((product) => {
+                  const discount = getEffectiveDiscount(product);
+                  const finalUnitPrice = product.price * (1 - discount / 100);
+                  const cartItem = cart.find((item) => item.productId === product.id);
+                  return (
+                    <article key={`campaign-${product.id}`} className="rounded-[1.2rem] border border-white/80 bg-white p-2.5 shadow-[0_16px_42px_-32px_rgba(15,23,42,0.45)]">
+                      <button onClick={() => openProductOverlay(product)} className="relative block h-28 w-full overflow-hidden rounded-[1rem] bg-slate-50 text-left sm:h-36">
+                        <img src={product.image || offerFallbackImage} alt={product.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                        {discount > 0 && <span className="absolute left-2 top-2 rounded-full bg-[#ff2d2d] px-2 py-1 text-[9px] font-bold text-white">{discount}% OFF</span>}
+                      </button>
+                      <button onClick={() => openProductOverlay(product)} className="mt-2 line-clamp-2 text-left text-xs font-extrabold leading-4 text-slate-900 sm:text-sm">
+                        {product.name}
+                      </button>
+                      <p className="mt-1 truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{product.brand || 'NammaShop'}</p>
+                      <div className="mt-2 flex items-end justify-between gap-2">
+                        <div>
+                          {discount > 0 && <p className="text-[10px] text-slate-400 line-through">Â£{product.price.toFixed(2)}</p>}
+                          <p className="text-sm font-extrabold text-slate-900">Â£{finalUnitPrice.toFixed(2)}</p>
+                        </div>
+                        {cartItem ? (
+                          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                            <button onClick={() => decreaseCartCount(product.id)} className="rounded-lg bg-white p-1"><Minus size={10} /></button>
+                            <span className="min-w-4 text-center text-xs font-extrabold">{cartItem.quantity}</span>
+                            <button onClick={() => addToCart(product.id, 1)} className="rounded-lg bg-white p-1"><Plus size={10} /></button>
+                          </div>
+                        ) : (
+                          <button onClick={() => addToCart(product.id, 1)} className="rounded-xl bg-[#ff2d2d] px-3 py-2 text-[10px] font-bold text-white">
+                            Add
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* VIEW 4: DEFAULT HOMEPAGE HERO & HOME CATALOG */}
         {viewMode === 'catalog' && (
           <div className="space-y-8 animate-in fade-in duration-200">
             <section className="flex justify-center sm:justify-start">
@@ -2677,33 +2851,63 @@ export default function App() {
               </button>
             </section>
 
-            <section className="relative overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white text-slate-900 shadow-[0_28px_80px_-38px_rgba(15,23,42,0.18)]">
+            <section
+              className="relative overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-slate-950 text-white shadow-[0_28px_80px_-38px_rgba(15,23,42,0.45)] sm:rounded-[2rem]"
+              onTouchStart={(event) => setBannerTouchStartX(event.touches[0]?.clientX ?? null)}
+              onTouchEnd={(event) => {
+                if (bannerTouchStartX === null || banners.length < 2) return;
+                const delta = (event.changedTouches[0]?.clientX ?? bannerTouchStartX) - bannerTouchStartX;
+                if (Math.abs(delta) > 42) {
+                  setBannerIndex((prev) => delta > 0 ? (prev - 1 + banners.length) % banners.length : (prev + 1) % banners.length);
+                }
+                setBannerTouchStartX(null);
+              }}
+            >
               {activeBanner && (
                 <>
                   <img
                     src={activeBanner.image}
                     alt={activeBanner.title}
                     loading="eager"
-                    className="absolute inset-0 h-full w-full object-cover opacity-25"
+                    className="absolute inset-0 h-full w-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,45,45,0.16),transparent_26%),linear-gradient(120deg,rgba(255,255,255,0.82),rgba(255,246,246,0.96))]" />
+                  <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(15,23,42,0.86),rgba(15,23,42,0.52)_52%,rgba(15,23,42,0.2)),linear-gradient(0deg,rgba(0,0,0,0.38),transparent_52%)]" />
                 </>
               )}
-              <div className="relative grid gap-6 p-5 sm:p-7 lg:grid-cols-[1.3fr_0.9fr] lg:p-10">
-                <div className="space-y-5">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.24em] text-slate-700">
-                    <span className="rounded-full bg-red-50 text-[#ff2d2d] px-3 py-1">{activeBanner?.badge || 'Sponsored campaign'}</span>
-                    <span className="rounded-full bg-slate-100 px-3 py-1">{activeBanner?.sponsorName || 'UK grocery express'}</span>
+              {!activeBanner && <div className="absolute inset-0 bg-[linear-gradient(120deg,#111827,#ff2d2d)]" />}
+              {banners.length > 1 && (
+                <>
+                  <button
+                    onClick={() => setBannerIndex((prev) => (prev - 1 + banners.length) % banners.length)}
+                    className="absolute left-3 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-white/18 text-white shadow-lg backdrop-blur-md transition hover:scale-105 hover:bg-white/28 sm:left-4 sm:h-11 sm:w-11"
+                    aria-label="Previous sponsored banner"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <button
+                    onClick={() => setBannerIndex((prev) => (prev + 1) % banners.length)}
+                    className="absolute right-3 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-white/18 text-white shadow-lg backdrop-blur-md transition hover:scale-105 hover:bg-white/28 sm:right-4 sm:h-11 sm:w-11"
+                    aria-label="Next sponsored banner"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </>
+              )}
+              <div className="relative min-h-[300px] p-5 sm:min-h-[370px] sm:p-7 lg:p-10">
+                <div className="flex min-h-[260px] max-w-2xl flex-col justify-end space-y-4 sm:min-h-[310px]">
+                  <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.22em] text-white/85">
+                    <span className="rounded-full border border-white/25 bg-white/18 px-3 py-1 backdrop-blur">{activeBanner?.badge || 'Sponsored campaign'}</span>
+                    <span className="rounded-full border border-white/20 bg-black/20 px-3 py-1 backdrop-blur">{activeBanner?.sponsorName || 'NammaShop partner'}</span>
                     {activeBannerDiscount !== null && (
-                      <span className="rounded-full bg-rose-600 px-3 py-1 text-white">{activeBannerDiscount}% off</span>
+                      <span className="rounded-full bg-[#ff2d2d] px-3 py-1 text-white shadow-lg">{activeBannerDiscount}% off</span>
                     )}
                   </div>
                   <div className="space-y-3">
-                    <h2 className="max-w-xl font-['Fraunces'] text-3xl leading-[1.05] sm:text-5xl">
+                    <h2 className="max-w-xl font-['Fraunces'] text-3xl leading-[1.05] text-white drop-shadow-lg sm:text-5xl">
                       {activeBanner?.title || 'Premium groceries, household essentials, and weekly staples delivered beautifully.'}
                     </h2>
-                    <p className="max-w-lg text-sm leading-6 text-slate-600 sm:text-base">
+                    <p className="max-w-lg text-sm leading-6 text-white/84 sm:text-base">
                       {activeBanner?.offerText || activeBanner?.subtitle || 'Built for UK shoppers with fast delivery windows, curated offers, and a polished mobile-first experience that feels like a real production storefront.'}
                     </p>
                   </div>
@@ -2715,8 +2919,8 @@ export default function App() {
                       {activeBanner?.ctaLabel || 'Shop Now'}
                     </button>
                     <button
-                      onClick={() => activeBanner ? handleBannerNavigate(activeBanner, activeBanner.targetCategoryId || null) : setIsCartDrawerOpen(true)}
-                      className="rounded-2xl border border-red-200 bg-white px-5 py-3 text-sm font-bold text-[#ff2d2d] backdrop-blur transition hover:bg-red-50"
+                      onClick={() => activeBanner ? openCampaignCategory(activeBanner) : setIsCartDrawerOpen(true)}
+                      className="rounded-2xl border border-white/30 bg-white/16 px-5 py-3 text-sm font-bold text-white backdrop-blur transition hover:bg-white/24"
                     >
                       {activeBanner?.secondaryCtaLabel || 'Explore Collection'}
                     </button>
@@ -2737,28 +2941,28 @@ export default function App() {
 
                 <div className="grid gap-3 self-end">
                   {banners.length > 1 && (
-                    <div className="flex items-center justify-between rounded-[1.5rem] border border-slate-200 bg-white/92 p-3 backdrop-blur-md">
+                    <div className="flex items-center justify-between rounded-[1.5rem] border border-white/20 bg-black/20 p-3 backdrop-blur-md">
                       <button
                         onClick={() => setBannerIndex((prev) => (prev - 1 + banners.length) % banners.length)}
-                        className="rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-200"
+                        className="rounded-full bg-white/18 p-2 text-white transition hover:scale-105 hover:bg-white/28"
                       >
-                        Prev
+                        <ChevronLeft size={16} />
                       </button>
                       <div className="flex gap-2">
                         {banners.map((banner, idx) => (
                           <button
                             key={banner.id}
                             onClick={() => setBannerIndex(idx)}
-                            className={`h-2.5 rounded-full transition-all ${idx === bannerIndex ? 'w-8 bg-[#ff2d2d]' : 'w-2.5 bg-slate-300'}`}
+                            className={`h-2 rounded-full transition-all ${idx === bannerIndex ? 'w-8 bg-white' : 'w-2 bg-white/45'}`}
                             aria-label={`Go to banner ${idx + 1}`}
                           />
                         ))}
                       </div>
                       <button
                         onClick={() => setBannerIndex((prev) => (prev + 1) % banners.length)}
-                        className="rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-200"
+                        className="rounded-full bg-white/18 p-2 text-white transition hover:scale-105 hover:bg-white/28"
                       >
-                        Next
+                        <ChevronRight size={16} />
                       </button>
                     </div>
                   )}
@@ -2767,11 +2971,11 @@ export default function App() {
               </div>
             </section>
 
-            <section className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-              <div className="rounded-[2rem] border border-white/70 bg-[rgba(255,255,255,0.8)] p-4 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.35)] backdrop-blur-xl sm:p-5">
+            <section className="grid gap-4">
+              <div className="hidden">
                 <div className="mb-4 flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Quick categories</p>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Home departments</p>
                     <h3 className="text-lg font-extrabold text-slate-900">Start with a department</h3>
                   </div>
                   <button
@@ -3090,7 +3294,8 @@ export default function App() {
                 const visibleCount = railVisibleCounts[railKey] || 8;
                 const visibleItems = rail.items.slice(0, visibleCount);
                 return (
-                <section key={rail.title} className="space-y-4">
+                <React.Fragment key={rail.title}>
+                <section className="space-y-4">
                   <div className="flex items-end justify-between gap-3">
                     <div>
                       <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Curated rail</p>
@@ -3194,7 +3399,55 @@ export default function App() {
                     </button>
                   )}
                 </section>
+                {rail.title === 'Trending Products' && activeBanner && (
+                  <button
+                    onClick={() => handleBannerNavigate(activeBanner)}
+                    className="group relative block w-full overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-950 text-left text-white shadow-[0_24px_70px_-38px_rgba(15,23,42,0.55)] transition hover:-translate-y-0.5 sm:rounded-[2rem]"
+                  >
+                    <img src={activeBanner.image} alt={activeBanner.title} className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-105" referrerPolicy="no-referrer" />
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(15,23,42,0.88),rgba(15,23,42,0.5),rgba(15,23,42,0.12))]" />
+                    <div className="relative flex min-h-[150px] flex-col justify-end p-5 sm:min-h-[190px] sm:p-7">
+                      <div className="mb-2 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-white/75">
+                        <span className="rounded-full border border-white/25 bg-white/16 px-3 py-1 backdrop-blur">{activeBanner.badge || 'Sponsored'}</span>
+                        {activeBannerDiscount !== null && <span className="rounded-full bg-[#ff2d2d] px-3 py-1 text-white">{activeBannerDiscount}% off</span>}
+                      </div>
+                      <h3 className="max-w-xl font-['Fraunces'] text-2xl leading-tight sm:text-4xl">{activeBanner.title}</h3>
+                      <p className="mt-2 max-w-lg text-sm text-white/80">{activeBanner.offerText || activeBanner.subtitle || 'Shop the latest promoted grocery campaign.'}</p>
+                    </div>
+                  </button>
+                )}
+                </React.Fragment>
               )})}
+            </section>
+
+            <section className="space-y-3 rounded-[1.6rem] border border-white/70 bg-[rgba(255,255,255,0.82)] p-4 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.35)] backdrop-blur-xl sm:p-5">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Indian favorites</p>
+                  <h3 className="text-lg font-extrabold text-slate-900">Popular Indian Brands</h3>
+                </div>
+                <button
+                  onClick={() => setSearchTerm('Indian')}
+                  className="rounded-full bg-slate-900 px-3 py-2 text-[10px] font-bold text-white"
+                >
+                  Explore
+                </button>
+              </div>
+              <div className="flex gap-3 overflow-x-auto pb-1 no-scrollbar">
+                {indianBrands.map((brand) => (
+                  <button
+                    key={brand.name}
+                    onClick={() => setBrandFilter(brand.name)}
+                    className={`flex min-w-[112px] shrink-0 flex-col items-start rounded-2xl border px-3 py-3 text-left shadow-sm transition hover:-translate-y-0.5 ${brand.tone}`}
+                  >
+                    <span className="mb-3 flex h-8 w-8 items-center justify-center rounded-xl bg-white/80 text-sm font-black shadow-sm">
+                      {brand.name.charAt(0)}
+                    </span>
+                    <span className="text-sm font-extrabold leading-tight">{brand.name}</span>
+                    <span className="mt-1 text-[10px] font-semibold opacity-70">Grocery staple</span>
+                  </button>
+                ))}
+              </div>
             </section>
 
             {products.length === 0 ? (
