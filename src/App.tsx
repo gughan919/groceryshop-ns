@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -63,7 +63,7 @@ import {
   setPersistence,
   browserLocalPersistence
 } from 'firebase/auth';
-import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
 import { generateAndUploadInvoice } from './utils/invoice';
 
 declare global {
@@ -75,6 +75,23 @@ declare global {
 const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
 const HOMEPAGE_PRODUCTS_LIMIT = 64;
 type DiscountFilterId = '10' | '20' | '30' | '40' | '50' | 'special' | 'flash' | 'best';
+
+const stableStringify = (value: unknown) => JSON.stringify(value);
+
+function sameCollectionByJson<T extends { id: string }>(left: T[], right: T[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index]?.id !== right[index]?.id) return false;
+    if (stableStringify(left[index]) !== stableStringify(right[index])) return false;
+  }
+  return true;
+}
+
+const traceRender = (...args: unknown[]) => {
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(...args);
+  }
+};
 
 const DISCOUNT_FILTERS: Array<{ id: DiscountFilterId; label: string; description: string }> = [
   { id: '10', label: '10% Off', description: 'Products with exactly 10% savings' },
@@ -198,14 +215,27 @@ export default function App() {
   // Modal toggles for Auth
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot' | 'phone' | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
+  const [authResolving, setAuthResolving] = useState(false);
   const [authForm, setAuthForm] = useState({ email: '', password: '', name: '', phone: '', otpInput: '' });
   const [verificationRequiredEmail, setVerificationRequiredEmail] = useState<string | null>(null);
   const [phoneVerificationInProgress, setPhoneVerificationInProgress] = useState<boolean>(false);
   const [phoneConfirmationResult, setPhoneConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const latestTokenRef = useRef<string | null>(token);
+  const latestUserRef = useRef<User | null>(null);
+  const authRequestSeqRef = useRef(0);
+  const firebaseSyncInFlightRef = useRef<string | null>(null);
+  const customerDataSeqRef = useRef(0);
 
   // Core Store States (Retrieved dynamically from backend API)
   const [products, setProducts] = useState<Product[]>([]);
+  const [productCache, setProductCache] = useState<Record<string, Product>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('nammashop_product_cache') || '{}');
+    } catch {
+      return {};
+    }
+  });
   const [categories, setCategories] = useState<Category[]>([]);
   const [banners, setBanners] = useState<DashboardBanner[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -292,22 +322,35 @@ export default function App() {
   const [profileSubTab, setProfileSubTab] = useState<'profile' | 'orders' | 'addresses' | 'wishlist' | 'tracking'>('profile');
 
   // Checkout shipping states
-  const [selectedAddressId, setSelectedAddressId] = useState<string>('');
-  const [paymentMethod, setPaymentMethod] = useState<'COD' | 'Razorpay' | 'Stripe'>('COD');
+  const [selectedAddressId, setSelectedAddressId] = useState<string>(() => localStorage.getItem('nammashop_selected_address_id') || '');
+  const [paymentMethod, setPaymentMethod] = useState<'COD' | 'Razorpay' | 'Stripe'>(() => {
+    const saved = localStorage.getItem('nammashop_payment_method');
+    return saved === 'COD' || saved === 'Razorpay' || saved === 'Stripe' ? saved : 'COD';
+  });
   const [isAddingNewAddress, setIsAddingNewAddress] = useState(false);
   const [isPendingCheckout, setIsPendingCheckout] = useState(false);
   const [stripeRedirecting, setStripeRedirecting] = useState(false);
   const [stripeSessionUrl, setStripeSessionUrl] = useState<string>('');
-  const [newAddressForm, setNewAddressForm] = useState({
+  const emptyAddressForm = {
     label: 'Home',
     fullName: '',
     street: '',
     city: '',
     state: '',
     pincode: '',
-    phone: ''
+    phone: '',
+    country: ''
+  };
+  const [newAddressForm, setNewAddressForm] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nammashop_checkout_address_form');
+      return saved ? { ...emptyAddressForm, ...JSON.parse(saved) } : emptyAddressForm;
+    } catch {
+      return emptyAddressForm;
+    }
   });
   const [addressErrors, setAddressErrors] = useState<Record<string, string>>({});
+  const [isSavingAddress, setIsSavingAddress] = useState(false);
 
   // Review Submissions
   const [reviewRatingInput, setReviewRatingInput] = useState<number>(5);
@@ -316,6 +359,17 @@ export default function App() {
   // Notifications system Toast state
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [notifications, setNotifications] = useState<any[]>([]); // NEW: Notification History
+  const notificationTimerRef = useRef<number | null>(null);
+  const adminKnownOrderIdsRef = useRef<Set<string>>(new Set());
+  const adminOrdersBootstrappedRef = useRef(false);
+
+  traceRender('App render', {
+    authInitialized,
+    authResolving,
+    userId: currentUser?.id || null,
+    viewMode,
+    cartCount: cart.length
+  });
 
   // NEW: Real-time listener for incoming orders (Admin)
   useEffect(() => {
@@ -323,8 +377,19 @@ export default function App() {
 
     const ordersRef = collection(firestoreDb, 'orders');
     const unsub = onSnapshot(query(ordersRef, orderBy('createdAt', 'desc')), (snapshot) => {
+      console.debug('Firestore admin orders snapshot', {
+        size: snapshot.size,
+        changes: snapshot.docChanges().length,
+        bootstrapped: adminOrdersBootstrappedRef.current
+      });
+      if (!adminOrdersBootstrappedRef.current) {
+        adminKnownOrderIdsRef.current = new Set(snapshot.docs.map((doc) => doc.id));
+        adminOrdersBootstrappedRef.current = true;
+        return;
+      }
       snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
+        if (change.type === 'added' && !adminKnownOrderIdsRef.current.has(change.doc.id)) {
+          adminKnownOrderIdsRef.current.add(change.doc.id);
           const newOrder = { id: change.doc.id, ...change.doc.data() } as Order;
           setNotifications(prev => [{
             id: Date.now(),
@@ -337,7 +402,11 @@ export default function App() {
     }, (error) => {
       console.warn('Admin real-time order notifications listener restricted:', error.message);
     });
-    return () => unsub();
+    return () => {
+      unsub();
+      adminOrdersBootstrappedRef.current = false;
+      adminKnownOrderIdsRef.current.clear();
+    };
   }, [currentUser]);
 
   // Banner slide index
@@ -351,6 +420,44 @@ export default function App() {
     }
   });
   const [deliverySlot, setDeliverySlot] = useState<'express' | 'evening' | 'scheduled'>('express');
+  const cacheProducts = useCallback((incomingProducts: Product[]) => {
+    if (!incomingProducts.length) return;
+    setProductCache(prev => {
+      const next = { ...prev };
+      let changed = false;
+      incomingProducts.forEach(product => {
+        if (product?.id && stableStringify(prev[product.id]) !== stableStringify(product)) {
+          next[product.id] = product;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+  const productById = useMemo(() => {
+    const next = { ...productCache };
+    products.forEach(product => {
+      if (product?.id) next[product.id] = product;
+    });
+    return next;
+  }, [productCache, products]);
+  const normalizeAddressRecord = (raw: any): Address => {
+    const postalCode = String(raw?.pincode ?? raw?.postalCode ?? raw?.postal_code ?? raw?.zip ?? '').trim();
+    const street = String(raw?.street ?? raw?.house ?? raw?.addressLine1 ?? '').trim();
+    return {
+      id: String(raw?.id || '').trim(),
+      label: String(raw?.label || 'Home').trim(),
+      fullName: String(raw?.fullName ?? raw?.name ?? '').trim(),
+      phone: String(raw?.phone ?? raw?.phoneNumber ?? '').trim(),
+      house: String(raw?.house ?? '').trim(),
+      street,
+      city: String(raw?.city || '').trim(),
+      state: String(raw?.state || '').trim(),
+      pincode: postalCode,
+      postalCode,
+      country: String(raw?.country ?? raw?.Country ?? raw?.countryName ?? raw?.country_code ?? '').trim()
+    };
+  };
   const categoryMap = new Map(categories.map((category) => [category.id, category.name]));
   const whatsappSupportNumber = '447700900123';
   const activeBanner = banners[bannerIndex];
@@ -587,9 +694,13 @@ export default function App() {
 
   // Trigger toast notify helper
   const notifyUser = (message: string, type: 'success' | 'error' = 'success') => {
+    if (notificationTimerRef.current) {
+      window.clearTimeout(notificationTimerRef.current);
+    }
     setNotification({ message, type });
-    setTimeout(() => {
+    notificationTimerRef.current = window.setTimeout(() => {
       setNotification(null);
+      notificationTimerRef.current = null;
     }, 4500);
   };
 
@@ -624,6 +735,47 @@ export default function App() {
   const isLikelyFirebaseJwt = (value: string) => value.split('.').length === 3;
 
   useEffect(() => {
+    latestTokenRef.current = token;
+  }, [token]);
+
+  useEffect(() => {
+    latestUserRef.current = currentUser;
+    traceRender('User state updated', currentUser ? { id: currentUser.id, role: currentUser.role, email: currentUser.email } : null);
+  }, [currentUser]);
+
+  useEffect(() => {
+    traceRender('Route changed', { viewMode });
+  }, [viewMode]);
+
+  useEffect(() => {
+    traceRender('Cart updated', { items: cart.length, quantity: cart.reduce((sum, item) => sum + item.quantity, 0) });
+  }, [cart]);
+
+  const commitAuthenticatedSession = async (
+    sessionToken: string,
+    user: User,
+    source: string,
+    options: { fetchProfile?: boolean; closeAuth?: boolean; targetView?: 'catalog' | 'admin' } = {}
+  ) => {
+    const shouldUpdateToken = latestTokenRef.current !== sessionToken;
+    const shouldUpdateUser = latestUserRef.current?.id !== user.id || latestUserRef.current?.role !== user.role || latestUserRef.current?.email !== user.email;
+
+    console.debug('[AUTH SESSION COMMIT]', { source, userId: user.id, role: user.role, shouldUpdateToken, shouldUpdateUser });
+    localStorage.setItem('nammashop_token', sessionToken);
+    latestTokenRef.current = sessionToken;
+    latestUserRef.current = user;
+    if (shouldUpdateToken) setToken(sessionToken);
+    if (shouldUpdateUser) setCurrentUser(user);
+    setAuthInitialized(true);
+    setAuthResolving(false);
+    if (options.closeAuth !== false) setAuthMode(null);
+    if (options.targetView) setViewMode(options.targetView);
+    if (options.fetchProfile !== false) {
+      await fetchCustomerData(sessionToken);
+    }
+  };
+
+  useEffect(() => {
     localStorage.setItem('nammashop_viewMode', viewMode);
   }, [viewMode]);
 
@@ -652,7 +804,16 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(firebaseAuth, async (firebaseUser) => {
       if (cancelled) return;
+      const requestId = ++authRequestSeqRef.current;
+      traceRender('Auth changed', { hasFirebaseUser: !!firebaseUser, uid: firebaseUser?.uid, email: firebaseUser?.email });
       if (firebaseUser) {
+        const syncKey = `${firebaseUser.uid}:${firebaseUser.email || ''}`;
+        if (firebaseSyncInFlightRef.current === syncKey) {
+          console.debug('[AUTH STATE SKIP] Firebase sync already in flight', syncKey);
+          return;
+        }
+        firebaseSyncInFlightRef.current = syncKey;
+        setAuthResolving(true);
         try {
           const firebaseToken = await firebaseUser.getIdToken();
           const resp = await fetch('/api/auth/firebase-sync', {
@@ -664,26 +825,37 @@ export default function App() {
             body: JSON.stringify({})
           });
           const data = await resp.json();
+          if (cancelled || requestId !== authRequestSeqRef.current) return;
           if (resp.ok && data.success) {
-            localStorage.setItem('nammashop_token', firebaseToken);
-            setToken(firebaseToken);
-            setCurrentUser(data.user);
-            fetchCustomerData(firebaseToken);
+            await commitAuthenticatedSession(firebaseToken, data.user, 'firebase-listener', {
+              targetView: data.user.role === 'admin' ? 'admin' : undefined
+            });
+          } else {
+            console.warn('[AUTH STATE SYNC REJECTED]', data.error);
             setAuthInitialized(true);
+            setAuthResolving(false);
           }
         } catch (e) {
           console.warn('Firebase user sync failed, preserving backend session while retrying later.', e);
-          if (token) {
-            await validateSession(token, false);
+          const fallbackToken = latestTokenRef.current;
+          if (fallbackToken) {
+            await validateSession(fallbackToken, false);
           } else {
             setAuthInitialized(true);
+            setAuthResolving(false);
+          }
+        } finally {
+          if (firebaseSyncInFlightRef.current === syncKey) {
+            firebaseSyncInFlightRef.current = null;
           }
         }
       } else {
-        if (token) {
-          await validateSession(token, false);
+        const fallbackToken = latestTokenRef.current;
+        if (fallbackToken) {
+          await validateSession(fallbackToken, false);
         } else {
           setAuthInitialized(true);
+          setAuthResolving(false);
         }
       }
     });
@@ -770,31 +942,19 @@ export default function App() {
 
   // Real-time Firestore synchronization for catalog products, categories, active banners, and coupons
   useEffect(() => {
-    let unsubProducts: () => void;
     let unsubCategories: () => void;
     let unsubBanners: () => void;
     let unsubCoupons: () => void;
 
     try {
-      const productsRef = query(collection(firestoreDb, 'products'), limit(HOMEPAGE_PRODUCTS_LIMIT));
-      unsubProducts = onSnapshot(productsRef, (snapshot) => {
-        const prodList: Product[] = [];
-        snapshot.forEach((doc) => {
-          prodList.push({ id: doc.id, ...doc.data() } as Product);
-        });
-        if (prodList.length > 0) {
-          setProducts(prodList);
-        }
-      }, (error) => {
-        console.warn('Real-time Products snapshot listener pending/offline. Falling back to REST API.');
-      });
-
       unsubCategories = onSnapshot(collection(firestoreDb, 'categories'), (snapshot) => {
         const catList: Category[] = [];
         snapshot.forEach((doc) => {
           catList.push({ id: doc.id, ...doc.data() } as Category);
         });
-        if (catList.length > 0) setCategories(catList);
+        if (catList.length > 0) {
+          setCategories(prev => sameCollectionByJson(prev, catList) ? prev : catList);
+        }
       }, (error) => {
         console.warn('Real-time Categories snapshot listener offline.');
       });
@@ -813,7 +973,9 @@ export default function App() {
             return startOk && endOk;
           })
           .sort((a, b) => (a.priority || 999) - (b.priority || 999));
-        if (liveBanners.length > 0) setBanners(liveBanners);
+        if (liveBanners.length > 0) {
+          setBanners(prev => sameCollectionByJson(prev, liveBanners) ? prev : liveBanners);
+        }
       }, (error) => {
         console.warn('Real-time Banners snapshot listener offline.');
       });
@@ -823,7 +985,9 @@ export default function App() {
         snapshot.forEach((doc) => {
           cpList.push({ id: doc.id, ...doc.data() } as Coupon);
         });
-        if (cpList.length > 0) setCoupons(cpList);
+        if (cpList.length > 0) {
+          setCoupons(prev => sameCollectionByJson(prev, cpList) ? prev : cpList);
+        }
       }, (error) => {
         console.warn('Real-time Coupons snapshot listener offline.');
       });
@@ -833,7 +997,6 @@ export default function App() {
     }
 
     return () => {
-      if (unsubProducts) unsubProducts();
       if (unsubCategories) unsubCategories();
       if (unsubBanners) unsubBanners();
       if (unsubCoupons) unsubCoupons();
@@ -860,7 +1023,7 @@ export default function App() {
         });
         // Sort orders by createdAt descending to show latest first
         ordList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setOrders(ordList);
+        setOrders(prev => sameCollectionByJson(prev, ordList) ? prev : ordList);
       }, (error) => {
         console.warn('Real-time Orders query listener offline/pending permissions. Responding via fallback REST:', error.message);
       });
@@ -869,11 +1032,13 @@ export default function App() {
       unsubAddresses = onSnapshot(addressesRef, (snapshot) => {
         const addrList: Address[] = [];
         snapshot.forEach((doc) => {
-          addrList.push({ id: doc.id, ...doc.data() } as Address);
+          addrList.push(normalizeAddressRecord({ id: doc.id, ...doc.data() }));
         });
-        setAddresses(addrList);
-        if (addrList.length > 0 && !selectedAddressId) {
-          setSelectedAddressId(addrList[0].id);
+        setAddresses(prev => sameCollectionByJson(prev, addrList) ? prev : addrList);
+        if (addrList.length > 0) {
+          const savedAddressId = localStorage.getItem('nammashop_selected_address_id') || selectedAddressId;
+          const nextAddressId = addrList.some(address => address.id === savedAddressId) ? savedAddressId : addrList[0].id;
+          setSelectedAddressId(prev => prev === nextAddressId ? prev : nextAddressId);
         }
       }, (error) => {
         console.warn('Real-time Addresses query listener offline/pending.');
@@ -894,10 +1059,34 @@ export default function App() {
     localStorage.setItem('nammashop_cart', JSON.stringify(cart));
   }, [cart]);
 
+  useEffect(() => {
+    localStorage.setItem('nammashop_product_cache', JSON.stringify(productCache));
+  }, [productCache]);
+
+  useEffect(() => {
+    if (selectedAddressId) localStorage.setItem('nammashop_selected_address_id', selectedAddressId);
+  }, [selectedAddressId]);
+
+  useEffect(() => {
+    localStorage.setItem('nammashop_payment_method', paymentMethod);
+  }, [paymentMethod]);
+
+  useEffect(() => {
+    localStorage.setItem('nammashop_checkout_address_form', JSON.stringify(newAddressForm));
+  }, [newAddressForm]);
+
   // Sync wishlist shifts
   useEffect(() => {
     localStorage.setItem('nammashop_wishlist', JSON.stringify(wishlist));
   }, [wishlist]);
+
+  useEffect(() => {
+    return () => {
+      if (notificationTimerRef.current) {
+        window.clearTimeout(notificationTimerRef.current);
+      }
+    };
+  }, []);
 
   // Setup auto banner cycling slider
   useEffect(() => {
@@ -998,12 +1187,14 @@ export default function App() {
     setOfferError(null);
     const offerQuery = query(collection(firestoreDb, 'products'), where('discount', '==', activeOfferDiscount));
     const unsubscribe = onSnapshot(offerQuery, (snapshot) => {
-      setOfferProducts(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Product)));
+      const nextOfferProducts = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Product));
+      setOfferProducts(prev => sameCollectionByJson(prev, nextOfferProducts) ? prev : nextOfferProducts);
       setOfferLoading(false);
       setOfferError(null);
     }, (error) => {
       console.warn('Exact discount Firestore query unavailable:', error.message);
-      setOfferProducts(products.filter((product) => getEffectiveDiscount(product) === activeOfferDiscount));
+      const fallbackOfferProducts = products.filter((product) => getEffectiveDiscount(product) === activeOfferDiscount);
+      setOfferProducts(prev => sameCollectionByJson(prev, fallbackOfferProducts) ? prev : fallbackOfferProducts);
       setOfferError('Live offer query is temporarily unavailable. Showing cached matching products.');
       setOfferLoading(false);
     });
@@ -1015,23 +1206,33 @@ export default function App() {
     try {
       // 1. Fetch categories
       const catResp = await fetch('/api/categories');
-      if (catResp.ok) setCategories(await catResp.json());
+      if (catResp.ok) {
+        const nextCategories = await catResp.json();
+        setCategories(prev => sameCollectionByJson(prev, nextCategories) ? prev : nextCategories);
+      }
 
       // 3. Banners
       const banResp = await fetch('/api/banners');
-      if (banResp.ok) setBanners(await banResp.json());
+      if (banResp.ok) {
+        const nextBanners = await banResp.json();
+        setBanners(prev => sameCollectionByJson(prev, nextBanners) ? prev : nextBanners);
+      }
 
       // 4. Coupons (Admin visibility only, or mock available list for display)
       const cpResp = await fetch('/api/admin/coupons', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (cpResp.ok) setCoupons(await cpResp.json());
+      if (cpResp.ok) {
+        const nextCoupons = await cpResp.json();
+        setCoupons(prev => sameCollectionByJson(prev, nextCoupons) ? prev : nextCoupons);
+      }
       else {
         // Fallback demo coupon tags
-        setCoupons([
+        const fallbackCoupons = [
           { id: 'cp-30', code: 'NAMMA30', type: 'percent', value: 30, expiryDate: '2027-12-31', active: true, usageLimit: 1000, usageCount: 0 },
           { id: 'cp-50', code: 'SUPER50', type: 'fixed', value: 50, expiryDate: '2027-12-31', active: true, usageLimit: 500, usageCount: 0 }
-        ]);
+        ] as Coupon[];
+        setCoupons(prev => sameCollectionByJson(prev, fallbackCoupons) ? prev : fallbackCoupons);
       }
     } catch (err) {
       console.warn('Backend API fetching offline. Bootstrapping simulated local layers...');
@@ -1043,7 +1244,9 @@ export default function App() {
       setCatalogLoading(true);
       const prodResp = await fetch('/api/products?limit=600&sort=discount');
       if (!prodResp.ok) throw new Error('Product fallback API failed');
-      setProducts(await prodResp.json());
+      const fallbackProducts = await prodResp.json();
+      cacheProducts(fallbackProducts);
+      setProducts(prev => sameCollectionByJson(prev, fallbackProducts) ? prev : fallbackProducts);
       setCatalogError(null);
     } catch (error) {
       console.warn('Product catalog fallback failed:', error);
@@ -1054,6 +1257,8 @@ export default function App() {
   };
 
   const validateSession = async (sessionToken: string, clearOnFailure = true) => {
+    const requestId = ++authRequestSeqRef.current;
+    setAuthResolving(true);
     try {
       const resp = await fetch('/api/auth/me', {
         headers: {
@@ -1061,43 +1266,52 @@ export default function App() {
         }
       });
       const data = await resp.json();
+      if (requestId !== authRequestSeqRef.current) return;
       if (resp.ok && data.success) {
-        localStorage.setItem('nammashop_token', sessionToken);
-        setToken(sessionToken);
-        setCurrentUser(data.user);
-        fetchCustomerData(sessionToken);
-        setAuthInitialized(true);
+        await commitAuthenticatedSession(sessionToken, data.user, 'validate-session', { closeAuth: false });
       } else {
         // Expired or bad token
         if (clearOnFailure) {
           handleSignOut();
         } else {
           setAuthInitialized(true);
+          setAuthResolving(false);
         }
       }
     } catch {
       // Client offline fallback mode for testing
       console.warn('Using cache auth authentication settings.');
       setAuthInitialized(true);
+      setAuthResolving(false);
     }
   };
 
   const fetchCustomerData = async (sessionToken: string) => {
+    const requestId = ++customerDataSeqRef.current;
     try {
       // Fetch user specific entries
       const addrsResp = await fetch('/api/addresses', {
         headers: { 'Authorization': `Bearer ${sessionToken}` }
       });
+      if (requestId !== customerDataSeqRef.current || latestTokenRef.current !== sessionToken) return;
       if (addrsResp.ok) {
-        const addrList = await addrsResp.json();
-        setAddresses(addrList);
-        if (addrList.length > 0) setSelectedAddressId(addrList[0].id);
+        const addrList = (await addrsResp.json()).map((address: any) => normalizeAddressRecord(address));
+        setAddresses(prev => sameCollectionByJson(prev, addrList) ? prev : addrList);
+        if (addrList.length > 0) {
+          const savedAddressId = localStorage.getItem('nammashop_selected_address_id') || selectedAddressId;
+          const nextAddressId = addrList.some((address: Address) => address.id === savedAddressId) ? savedAddressId : addrList[0].id;
+          setSelectedAddressId(prev => prev === nextAddressId ? prev : nextAddressId);
+        }
       }
 
       const ordResp = await fetch('/api/orders', {
         headers: { 'Authorization': `Bearer ${sessionToken}` }
       });
-      if (ordResp.ok) setOrders(await ordResp.json());
+      if (requestId !== customerDataSeqRef.current || latestTokenRef.current !== sessionToken) return;
+      if (ordResp.ok) {
+        const nextOrders = await ordResp.json();
+        setOrders(prev => sameCollectionByJson(prev, nextOrders) ? prev : nextOrders);
+      }
     } catch {
       console.warn('Customer profiles mapping offline.');
     }
@@ -1109,7 +1323,8 @@ export default function App() {
     const unsubscribe = onSnapshot(productsRef, (snapshot) => {
       const liveProducts = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Product));
       if (liveProducts.length > 0) {
-        setProducts(liveProducts);
+        cacheProducts(liveProducts);
+        setProducts(prev => sameCollectionByJson(prev, liveProducts) ? prev : liveProducts);
         setCatalogError(null);
         setCatalogLoading(false);
       } else {
@@ -1289,6 +1504,8 @@ export default function App() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (authResolving) return;
+    setAuthResolving(true);
     try {
       setAuthError(null);
       await setPersistence(firebaseAuth, browserLocalPersistence);
@@ -1298,22 +1515,31 @@ export default function App() {
         setAuthError("Email is not verified. Please check your inbox or spam folder.");
         notifyUser("Access Denied: Please verify your email first.", 'error');
         await signOut(firebaseAuth);
+        setAuthResolving(false);
         return;
       }
-      notifyUser('Welcome back to Nammashop! 🚀', 'success');
+      notifyUser('Welcome back to Nammashop! ðŸš€', 'success');
       setAuthMode(null);
     } catch (err: any) {
         notifyUser(getFriendlyAuthError(err), 'error');
         setAuthError(getFriendlyAuthError(err));
+        setAuthResolving(false);
     }
   };
 
   const handleGoogleMockLogin = async () => {
+    if (authResolving) return;
+    setAuthResolving(true);
     try {
       // Attempt Real Firebase Google Social Login popup
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(firebaseAuth, provider);
       const firebaseUser = result.user;
+      if (firebaseUser) {
+        console.debug('[AUTH LOGIN] Google sign-in succeeded; onAuthStateChanged will commit the backend session once.');
+        setAuthMode(null);
+        return;
+      }
 
       const resp = await fetch('/api/auth/firebase-sync', {
         method: 'POST',
@@ -1326,29 +1552,34 @@ export default function App() {
       const data = await resp.json();
       if (resp.ok) {
         const idToken = await firebaseUser.getIdToken();
-        localStorage.setItem('nammashop_token', idToken);
-        setToken(idToken);
-        setCurrentUser(data.user);
-        notifyUser(`Google Auth verified! Welcome ${data.user.name} 🌱`, 'success');
-        setAuthMode(null);
-        setViewMode(data.user.role === 'admin' ? 'admin' : 'catalog');
+        await commitAuthenticatedSession(idToken, data.user, 'google-sync', {
+          targetView: data.user.role === 'admin' ? 'admin' : 'catalog'
+        });
+        notifyUser(`Google Auth verified! Welcome ${data.user.name} ðŸŒ±`, 'success');
       }
     } catch (fbErr: any) {
       const message = getFriendlyAuthError(fbErr);
       setAuthError(message);
       notifyUser(message, 'error');
+      setAuthResolving(false);
     }
   };
 
   const handleSignOut = async () => {
+    authRequestSeqRef.current += 1;
+    customerDataSeqRef.current += 1;
+    firebaseSyncInFlightRef.current = null;
     try {
       await signOut(firebaseAuth);
     } catch (e) {
       console.warn('Firebase logout exception');
     }
     localStorage.removeItem('nammashop_token');
+    latestTokenRef.current = null;
+    latestUserRef.current = null;
     setToken(null);
     setCurrentUser(null);
+    setAuthResolving(false);
     setAddresses([]);
     setOrders([]);
     setViewMode('catalog');
@@ -1478,8 +1709,15 @@ export default function App() {
   };
 
   // Cart valuations
-  const cartDetails = cart.map(item => {
-    const entry = products.find(p => p.id === item.productId);
+  const normalizedCart = cart
+    .map(item => ({
+      productId: item.productId,
+      quantity: Math.max(0, Math.floor(Number(item.quantity) || 0))
+    }))
+    .filter(item => item.productId && item.quantity > 0);
+
+  const cartDetails = normalizedCart.map(item => {
+    const entry = productById[item.productId];
     return {
       productId: item.productId,
       quantity: item.quantity,
@@ -1488,7 +1726,9 @@ export default function App() {
   }).filter(c => c.details !== undefined);
 
   const cartSubtotal = cartDetails.reduce((sum, item) => {
-    const finalPrice = item.details!.price * (1 - getEffectiveDiscount(item.details!) / 100);
+    const unitPrice = Number(item.details!.price) || 0;
+    const discountPercent = Math.min(100, Math.max(0, Number(getEffectiveDiscount(item.details!)) || 0));
+    const finalPrice = unitPrice * (1 - discountPercent / 100);
     return sum + (finalPrice * item.quantity);
   }, 0);
 
@@ -1520,9 +1760,9 @@ export default function App() {
   };
 
   const activeCouponDiscount = activeAppliedCoupon
-    ? (activeAppliedCoupon.type === 'percent'
-        ? (cartSubtotal * (activeAppliedCoupon.value / 100))
-        : activeAppliedCoupon.value)
+    ? Math.min(cartSubtotal, Math.max(0, activeAppliedCoupon.type === 'percent'
+        ? (cartSubtotal * ((Number(activeAppliedCoupon.value) || 0) / 100))
+        : (Number(activeAppliedCoupon.value) || 0)))
     : 0;
 
   const deliveryFeeBySlot = {
@@ -1531,12 +1771,15 @@ export default function App() {
     scheduled: 0
   };
   const finalDeliveryFee = cartSubtotal >= 20 || cartSubtotal === 0 ? 0 : deliveryFeeBySlot[deliverySlot];
-  const computedTax = cartSubtotal * 0.05; // 5% VAT on organic groceries
-  const cartGrandTotal = Math.max(0, cartSubtotal - activeCouponDiscount + finalDeliveryFee + computedTax);
+  const computedTax = Number((cartSubtotal * 0.05).toFixed(2)); // 5% VAT on organic groceries
+  const cartGrandTotal = Number(Math.max(0, cartSubtotal - activeCouponDiscount + finalDeliveryFee + computedTax).toFixed(2));
+  const missingCartProductIds = normalizedCart
+    .filter(item => !productById[item.productId])
+    .map(item => item.productId);
 
   const validateAddressForm = () => {
     const errors: Record<string, string> = {};
-    const { fullName, street, city, state, pincode, phone } = newAddressForm;
+    const { fullName, street, city, state, pincode, phone, country } = newAddressForm;
 
     if (!fullName.trim() || fullName.trim().length < 2) {
       errors.fullName = "Recipient name must be at least 2 letters.";
@@ -1558,6 +1801,12 @@ export default function App() {
       errors.state = "State or county is required.";
     } else if (/[0-9_@./#&+-]/.test(state)) {
       errors.state = "State name cannot contain digits or special characters.";
+    }
+
+    if (!country.trim()) {
+      errors.country = "Country is required.";
+    } else if (/[0-9_@./#&+-]/.test(country)) {
+      errors.country = "Country name cannot contain digits or special characters.";
     }
 
     // Comprehensive ZIP regex
@@ -1595,6 +1844,7 @@ export default function App() {
   const handleAddNewAddress = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
+    if (isSavingAddress) return;
     
     // Execute active client-side validations
     if (!validateAddressForm()) {
@@ -1602,6 +1852,7 @@ export default function App() {
       return;
     }
 
+    setIsSavingAddress(true);
     try {
       const resp = await fetch('/api/addresses', {
         method: 'POST',
@@ -1609,27 +1860,35 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(newAddressForm)
+        body: JSON.stringify({
+          ...newAddressForm,
+          house: newAddressForm.street,
+          postalCode: newAddressForm.pincode
+        })
       });
       const data = await resp.json();
       if (resp.ok) {
-        notifyUser('Delivery coordinates pinned!', 'success');
-        setIsAddingNewAddress(false);
-        fetchCustomerData(token);
-        setSelectedAddressId(data.address.id);
-        setAddressErrors({}); // Clear errors
-        setNewAddressForm({
-          label: 'Home',
-          fullName: '',
-          street: '',
-          city: '',
-          state: '',
-          pincode: '',
-          phone: ''
+        notifyUser('Delivery address saved and selected.', 'success');
+        const savedAddress = normalizeAddressRecord(data.address);
+        setAddresses(prev => {
+          const filtered = prev.filter(address => address.id !== savedAddress.id);
+          return [savedAddress, ...filtered];
         });
+        setIsAddingNewAddress(false);
+        setSelectedAddressId(savedAddress.id);
+        localStorage.setItem('nammashop_selected_address_id', savedAddress.id);
+        await fetchCustomerData(token);
+        setAddressErrors({}); // Clear errors
+        setNewAddressForm(emptyAddressForm);
+        localStorage.removeItem('nammashop_checkout_address_form');
+      } else {
+        notifyUser(data.error || 'Address could not be saved. Check every required field.', 'error');
       }
-    } catch {
+    } catch (error) {
+      console.error('Address save failed:', error);
       notifyUser('Error writing shipping address coordinates.', 'error');
+    } finally {
+      setIsSavingAddress(false);
     }
   };
 
@@ -1641,17 +1900,47 @@ export default function App() {
       setAuthMode('login');
       return;
     }
-    if (cart.length === 0) {
+    if (normalizedCart.length === 0) {
       notifyUser('Empty cart drawer. Please select grocery items first.', 'error');
+      return;
+    }
+    if (missingCartProductIds.length > 0 || cartDetails.length !== normalizedCart.length) {
+      console.error('Checkout blocked: cart product data missing', { missingCartProductIds, normalizedCart });
+      notifyUser('Some cart products are still loading. Please wait a moment and try again.', 'error');
+      fetchProductsFallback();
+      return;
+    }
+    if (!Number.isFinite(cartGrandTotal) || cartGrandTotal <= 0) {
+      console.error('Checkout blocked: invalid order total', { cartSubtotal, activeCouponDiscount, finalDeliveryFee, computedTax, cartGrandTotal });
+      notifyUser('Checkout total is invalid. Refreshing product prices now.', 'error');
+      fetchProductsFallback();
       return;
     }
     if (!selectedAddressId) {
       notifyUser('Please select or specify shipping coordinates address.', 'error');
       return;
     }
+    if (!paymentMethod) {
+      notifyUser('Please select a payment method before continuing.', 'error');
+      return;
+    }
 
     const payloadTargetAddress = addresses.find(a => a.id === selectedAddressId);
-    if (!payloadTargetAddress) return;
+    const normalizedCheckoutAddress = payloadTargetAddress ? normalizeAddressRecord(payloadTargetAddress) : null;
+    console.log('Checkout address object before order creation:', normalizedCheckoutAddress);
+    if (!normalizedCheckoutAddress) {
+      notifyUser('Selected delivery address is unavailable. Please choose or save it again.', 'error');
+      return;
+    }
+    const requiredAddressFields: Array<keyof Address> = ['fullName', 'phone', 'street', 'city', 'state', 'pincode'];
+    const missingAddressFields = requiredAddressFields.filter(field => !String(normalizedCheckoutAddress[field] || '').trim());
+    const countryMissing = !normalizedCheckoutAddress.country?.trim();
+    if (countryMissing) missingAddressFields.push('country' as keyof Address);
+    if (missingAddressFields.length > 0) {
+      console.error('Checkout blocked: incomplete delivery address', normalizedCheckoutAddress);
+      notifyUser(countryMissing ? 'Please select country.' : `Please complete delivery address: ${missingAddressFields.join(', ')}.`, 'error');
+      return;
+    }
 
     let paymentWindow: Window | null = null;
     if (paymentMethod === 'Stripe') {
@@ -1732,8 +2021,9 @@ export default function App() {
           subtotal: cartSubtotal,
           discount: activeCouponDiscount,
           couponCode: activeAppliedCoupon?.code,
-          address: payloadTargetAddress,
+          address: normalizedCheckoutAddress,
           paymentMethod,
+          deliverySlot,
           clientToken: token,
           clientOrigin: window.location.origin
         })
@@ -1795,10 +2085,11 @@ export default function App() {
         }
         notifyUser(data.error || 'Server rejected order transaction.', 'error');
       }
-    } catch {
+    } catch (error) {
       if (paymentWindow) {
         paymentWindow.close();
       }
+      console.error('Checkout request failed:', error);
       notifyUser('Api checkout payment gateway timeout.', 'error');
     } finally {
       setIsPendingCheckout(false);
@@ -1932,6 +2223,15 @@ export default function App() {
                 Cancel & Go Back
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {!authInitialized && (
+        <div className="fixed inset-0 z-[9998] bg-white dark:bg-slate-950 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <div className="h-8 w-8 rounded-full border-2 border-slate-200 border-t-[#ff2d2d] animate-spin" />
+            <p className="text-xs font-bold text-slate-500">Restoring secure session...</p>
           </div>
         </div>
       )}
@@ -2344,6 +2644,19 @@ export default function App() {
                         </div>
 
                         <div>
+                          <label className="block text-slate-500 font-medium mb-1">Country *</label>
+                          <input
+                            type="text"
+                            required
+                            value={newAddressForm.country}
+                            onChange={(e) => setNewAddressForm({ ...newAddressForm, country: e.target.value })}
+                            placeholder="e.g. United Kingdom"
+                            className={`w-full bg-white border ${addressErrors.country ? 'border-red-400 focus:ring-1 focus:ring-red-500/50' : 'border-slate-100'} rounded-lg px-2.5 py-1.5 focus:outline-none`}
+                          />
+                          {addressErrors.country && <p className="text-red-500 text-[10px] fixed mt-0.5">{addressErrors.country}</p>}
+                        </div>
+
+                        <div>
                           <label className="block text-slate-500 font-medium mb-1">Pincode *</label>
                           <input
                             type="text"
@@ -2380,9 +2693,10 @@ export default function App() {
                         </button>
                         <button
                           type="submit"
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-750 text-white font-semibold rounded-lg shadow-xs transition-all"
+                          disabled={isSavingAddress}
+                          className={`px-3 py-1.5 ${isSavingAddress ? 'bg-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-750'} text-white font-semibold rounded-lg shadow-xs transition-all`}
                         >
-                          Save Coordinates
+                          {isSavingAddress ? 'Saving...' : 'Save Coordinates'}
                         </button>
                       </div>
                     </form>
@@ -2406,6 +2720,7 @@ export default function App() {
                               <h4 className="font-bold text-gray-800">{a.fullName}</h4>
                               <p className="mt-1">{a.street}</p>
                               <p>{a.city}, {a.state} - {a.pincode}</p>
+                              {a.country && <p>{a.country}</p>}
                             </div>
                             <span className="text-[11px] font-mono font-bold text-slate-700 mt-2.5 block">Mobile: {a.phone}</span>
                           </div>
@@ -2502,6 +2817,16 @@ export default function App() {
                 <h4 className="text-gray-900 font-bold text-sm tracking-tight border-b border-gray-50 pb-2.5">Checkout Receipt summary</h4>
                 
                 <div className="space-y-3">
+                  {missingCartProductIds.length > 0 && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">
+                      Restoring live product prices for {missingCartProductIds.length} cart item{missingCartProductIds.length === 1 ? '' : 's'}...
+                    </div>
+                  )}
+                  {normalizedCart.length > 0 && cartDetails.length === 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-600">
+                      Loading your saved cart summary.
+                    </div>
+                  )}
                   {cartDetails.map((it, idx) => {
                     const priceNode = it.details!.price * (1 - getEffectiveDiscount(it.details!) / 100);
                     return (
@@ -2574,8 +2899,8 @@ export default function App() {
 
                 <button
                   onClick={checkoutCartAndPay}
-                  disabled={isPendingCheckout}
-                  className={`w-full ${isPendingCheckout ? 'bg-slate-450 cursor-not-allowed opacity-80' : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'} py-3 rounded-2xl text-white font-bold text-xs tracking-wider transition-all mt-4 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm`}
+                  disabled={isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0}
+                  className={`w-full ${isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0 ? 'bg-slate-450 cursor-not-allowed opacity-80' : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'} py-3 rounded-2xl text-white font-bold text-xs tracking-wider transition-all mt-4 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm`}
                 >
                   {isPendingCheckout ? (
                     <div className="h-3 w-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
@@ -3833,9 +4158,10 @@ export default function App() {
 
                     <button
                       type="submit"
-                      className="w-full bg-[#ff2d2d] hover:bg-[#e12626] text-white font-bold tracking-wider py-2.5 rounded-xl mt-3 shadow-xs cursor-pointer"
+                      disabled={authResolving}
+                      className={`w-full ${authResolving ? 'bg-slate-400 cursor-not-allowed' : 'bg-[#ff2d2d] hover:bg-[#e12626] cursor-pointer'} text-white font-bold tracking-wider py-2.5 rounded-xl mt-3 shadow-xs`}
                     >
-                      {authMode === 'login' ? 'Sign In Gate' : 'Create Free Account'}
+                      {authResolving ? 'Signing in...' : authMode === 'login' ? 'Sign In Gate' : 'Create Free Account'}
                     </button>
                   </form>
                 )}

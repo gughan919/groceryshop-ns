@@ -161,6 +161,7 @@ export default function CustomerProfileDashboard({
     city: '',
     state: '',
     pincode: '',
+    country: '',
     landmark: ''
   });
   const [autocompleteSearch, setAutocompleteSearch] = useState('');
@@ -272,17 +273,17 @@ export default function CustomerProfileDashboard({
   const handleAutocompleteSelect = (place: string) => {
     setAutocompleteSearch(place);
     let mockData = {
-      street: '', city: 'Bengaluru', state: 'Karnataka', pincode: '560034', landmark: 'Near Indiranagar Metro Station'
+      street: '', city: 'Bengaluru', state: 'Karnataka', pincode: '560034', country: 'India', landmark: 'Near Indiranagar Metro Station'
     };
 
     if (place.includes('Indiranagar')) {
-      mockData = { street: '12, 100 Feet Road, Indiranagar', city: 'Bengaluru', state: 'Karnataka', pincode: '560038', landmark: 'Opposite To Metro Pillar 132' };
+      mockData = { street: '12, 100 Feet Road, Indiranagar', city: 'Bengaluru', state: 'Karnataka', pincode: '560038', country: 'India', landmark: 'Opposite To Metro Pillar 132' };
     } else if (place.includes('Koramangala')) {
-      mockData = { street: '422, Oasis Mall Road, Koramangala 4th Block', city: 'Bengaluru', state: 'Karnataka', pincode: '560034', landmark: 'Beside Oasis Mall Entrance' };
+      mockData = { street: '422, Oasis Mall Road, Koramangala 4th Block', city: 'Bengaluru', state: 'Karnataka', pincode: '560034', country: 'India', landmark: 'Beside Oasis Mall Entrance' };
     } else if (place.includes('MG Road')) {
-      mockData = { street: '99, MG Road Trinity Cross', city: 'Bengaluru', state: 'Karnataka', pincode: '560001', landmark: 'Opposite To Taj MG Road Hotel' };
+      mockData = { street: '99, MG Road Trinity Cross', city: 'Bengaluru', state: 'Karnataka', pincode: '560001', country: 'India', landmark: 'Opposite To Taj MG Road Hotel' };
     } else {
-      mockData = { street: place, city: 'Bengaluru', state: 'Karnataka', pincode: '560068', landmark: 'Simulated Location' };
+      mockData = { street: place, city: 'Bengaluru', state: 'Karnataka', pincode: '560068', country: 'India', landmark: 'Simulated Location' };
     }
 
     setAddressForm(prev => ({
@@ -291,6 +292,7 @@ export default function CustomerProfileDashboard({
       city: mockData.city,
       state: mockData.state,
       pincode: mockData.pincode,
+      country: mockData.country,
       landmark: mockData.landmark
     }));
     notifyUser('Address auto-completed from Google Maps!', 'success');
@@ -313,6 +315,7 @@ export default function CustomerProfileDashboard({
           city: 'Bengaluru',
           state: 'Karnataka',
           pincode: '560038',
+          country: 'India',
           landmark: 'GPS Pinned Coordinates'
         }));
         notifyUser('Successfully loaded current GPS coordinates!', 'success');
@@ -326,6 +329,7 @@ export default function CustomerProfileDashboard({
           city: 'Bengaluru',
           state: 'Karnataka',
           pincode: '560010',
+          country: 'India',
           landmark: 'GPS Mock Pinned Gate'
         }));
         notifyUser('Location services protected, using precise mockup coords', 'info');
@@ -528,7 +532,8 @@ export default function CustomerProfileDashboard({
         street: target.street || '',
         city: target.city || '',
         state: target.state || '',
-        pincode: target.pincode || '',
+        pincode: target.pincode || target.postalCode || '',
+        country: target.country || '',
         landmark: target.landmark || ''
       });
     } else {
@@ -541,6 +546,7 @@ export default function CustomerProfileDashboard({
         city: '',
         state: '',
         pincode: '',
+        country: '',
         landmark: ''
       });
     }
@@ -551,9 +557,15 @@ export default function CustomerProfileDashboard({
   const handleSaveAddressRecord = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
+    const requiredFields = ['fullName', 'phone', 'street', 'city', 'state', 'pincode', 'country'] as const;
+    const missingFields = requiredFields.filter(field => !String(addressForm[field] || '').trim());
+    if (missingFields.length > 0) {
+      notifyUser(`Complete address required: ${missingFields.join(', ')}.`, 'error');
+      return;
+    }
 
     const addrId = editingAddressId || 'addr-' + Math.random().toString(36).substring(2, 9);
-    const newRecord = { id: addrId, ...addressForm };
+    const newRecord = { id: addrId, ...addressForm, postalCode: addressForm.pincode };
 
     try {
       // Direct Firestore write to addresses subcollection
@@ -561,7 +573,7 @@ export default function CustomerProfileDashboard({
       await setDoc(userRef, JSON.parse(JSON.stringify(newRecord)));
 
       // Call API sync so local db is updated as well
-      await fetch('/api/addresses', {
+      const syncResp = await fetch('/api/addresses', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -569,6 +581,10 @@ export default function CustomerProfileDashboard({
         },
         body: JSON.stringify(newRecord)
       });
+      if (!syncResp.ok) {
+        const err = await syncResp.json().catch(() => ({}));
+        throw new Error(err.error || 'Address sync failed.');
+      }
 
       notifyUser('Delivery location pinned to Firestore!', 'success');
       setIsAddressModalOpen(false);
@@ -1587,7 +1603,6 @@ export default function CustomerProfileDashboard({
                         <input
                           type="text"
                           required
-                          maxLength={6}
                           value={addressForm.pincode}
                           onChange={(e) => setAddressForm({ ...addressForm, pincode: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-150 rounded-xl px-2.5 py-2.5 focus:outline-none font-mono"
@@ -1626,6 +1641,18 @@ export default function CustomerProfileDashboard({
                           value={addressForm.state}
                           onChange={(e) => setAddressForm({ ...addressForm, state: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-150 rounded-xl px-2.5 py-2.5 focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-400 font-extrabold uppercase tracking-wider mb-1">Country *</label>
+                        <input
+                          type="text"
+                          required
+                          value={addressForm.country}
+                          onChange={(e) => setAddressForm({ ...addressForm, country: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-150 rounded-xl px-2.5 py-2.5 focus:outline-none"
+                          placeholder="United Kingdom"
                         />
                       </div>
                     </div>

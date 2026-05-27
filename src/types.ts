@@ -19,11 +19,14 @@ export interface Address {
   id: string;
   label: string; // Home, Work, etc.
   fullName: string;
+  house?: string;
   street: string;
   city: string;
   state: string;
   pincode: string;
+  postalCode?: string;
   phone: string;
+  country?: string;
 }
 
 export interface Review {

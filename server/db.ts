@@ -773,7 +773,11 @@ export const dbService = {
   updateUser: (userId: string, updates: Partial<User>) => {
     const userIndex = db.users.findIndex(u => u.id === userId);
     if (userIndex !== -1) {
-      db.users[userIndex] = { ...db.users[userIndex], ...updates };
+      const nextUser = { ...db.users[userIndex], ...updates };
+      if (JSON.stringify(db.users[userIndex]) === JSON.stringify(nextUser)) {
+        return db.users[userIndex];
+      }
+      db.users[userIndex] = nextUser;
       saveDb();
       
       const updatedUser = db.users[userIndex];

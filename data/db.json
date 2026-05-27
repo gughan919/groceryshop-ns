@@ -9,8 +9,10 @@
     {
       "id": "user-owner",
       "email": "mjjayan2007@gmail.com",
-      "name": "Nammashop Core Owner",
-      "role": "admin"
+      "name": "Mrithyunjayan MuthuKumar",
+      "role": "admin",
+      "avatar": "https://lh3.googleusercontent.com/a/ACg8ocKBqpKutOJ_IyoINLKICaZuKaA7l5K42Xj2D5qTnPdZ-wVILJY=s96-c",
+      "phone": ""
     },
     {
       "id": "user-customer",
@@ -43,16 +45,18 @@
     {
       "id": "user-google-5lc3b5ff",
       "email": "gughan4912@gmail.com",
-      "name": "gughan4912",
+      "name": "gug han",
       "role": "customer",
-      "avatar": "https://api.dicebear.com/7.x/pixel-art/svg?seed=gughan4912%40gmail.com"
+      "avatar": "https://lh3.googleusercontent.com/a/ACg8ocINic1ndqAxCDyVHFFl10OAywhrRBQVsJaTN7D4cxfdEvXzKQ=s96-c",
+      "phone": ""
     },
     {
       "id": "user-google-w4evn4xt",
       "email": "22i316@psgtech.ac.in",
-      "name": "22i316",
+      "name": "22I316 - GUGHAN D",
       "role": "customer",
-      "avatar": "https://api.dicebear.com/7.x/pixel-art/svg?seed=22i316%40psgtech.ac.in"
+      "avatar": "https://lh3.googleusercontent.com/a/ACg8ocJZstzaj2Bo8pWG1fl8qoEudaHf0CzsNJ3uUSHbhTlY1gZ70Q=s96-c",
+      "phone": ""
     }
   ],
   "passwords": {
@@ -700,7 +704,7 @@
       "description": "Roma Table penne pasta prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 1.73,
       "discount": 40,
-      "stock": 176,
+      "stock": 175,
       "image": "https://images.unsplash.com/photo-1551462147-ff29053bfc14?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-staples",
       "brand": "Roma Table",
@@ -972,7 +976,7 @@
       "description": "CrispCo salted potato crisps prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 1.37,
       "discount": 50,
-      "stock": 37,
+      "stock": 36,
       "image": "https://images.unsplash.com/photo-1566478989037-eec170784d0b?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-snacks-munchies",
       "brand": "CrispCo",
@@ -988,7 +992,7 @@
       "description": "TeaTime chocolate digestive biscuits prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 2.05,
       "discount": 50,
-      "stock": 50,
+      "stock": 48,
       "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-snacks-munchies",
       "brand": "TeaTime",
@@ -2124,7 +2128,7 @@
       "description": "Royal Grain basmati rice premium prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 12.44,
       "discount": 10,
-      "stock": 73,
+      "stock": 72,
       "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-staples",
       "brand": "Royal Grain",
@@ -9704,6 +9708,246 @@
   ],
   "orders": [
     {
+      "id": "ORD-74215",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-g4gsadt",
+          "productId": "prod-dynamic-cat-snacks-munchies-44",
+          "productName": "Chocolate Digestive Biscuits Value 9",
+          "productImage": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?q=80&w=600&auto=format&fit=crop",
+          "price": 1.02,
+          "quantity": 1,
+          "unit": "300 g"
+        }
+      ],
+      "subtotal": 1.02,
+      "discount": 0,
+      "tax": 0.05,
+      "deliveryFee": 2.99,
+      "total": 4.07,
+      "status": "Pending",
+      "paymentMethod": "Stripe",
+      "paymentStatus": "Paid",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T09:39:37.923Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T09:39:37.923Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        },
+        {
+          "status": "Pending",
+          "time": "2026-05-27T09:40:50.356Z",
+          "description": "Payment status updated to: Paid."
+        }
+      ],
+      "invoiceUrl": "/generated-invoices/INV-ORD-74215.pdf",
+      "invoiceId": "INV-ORD-74215",
+      "invoiceGeneratedAt": "2026-05-27T09:40:52.501Z",
+      "invoiceEmailStatus": "skipped",
+      "invoiceEmailError": "SMTP settings are not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and INVOICE_FROM_EMAIL to send real invoice emails."
+    },
+    {
+      "id": "ORD-33239",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-7gnlm43",
+          "productId": "prod-dynamic-cat-snacks-munchies-44",
+          "productName": "Chocolate Digestive Biscuits Value 9",
+          "productImage": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?q=80&w=600&auto=format&fit=crop",
+          "price": 1.02,
+          "quantity": 1,
+          "unit": "300 g"
+        }
+      ],
+      "subtotal": 1.02,
+      "discount": 0,
+      "tax": 0.05,
+      "deliveryFee": 2.99,
+      "total": 4.07,
+      "status": "Pending",
+      "paymentMethod": "Stripe",
+      "paymentStatus": "Pending",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T08:52:23.889Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T08:52:23.889Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ]
+    },
+    {
+      "id": "ORD-17936",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-pand7rm",
+          "productId": "prod-dynamic-cat-snacks-munchies-43",
+          "productName": "Salted Potato Crisps Value 9",
+          "productImage": "https://images.unsplash.com/photo-1566478989037-eec170784d0b?q=80&w=600&auto=format&fit=crop",
+          "price": 0.69,
+          "quantity": 1,
+          "unit": "150 g"
+        }
+      ],
+      "subtotal": 0.69,
+      "discount": 0,
+      "tax": 0.03,
+      "deliveryFee": 2.99,
+      "total": 3.71,
+      "status": "Pending",
+      "paymentMethod": "COD",
+      "paymentStatus": "Pending",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T08:52:06.719Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T08:52:06.719Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ]
+    },
+    {
+      "id": "ORD-61359",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-clbgisy",
+          "productId": "prod-dynamic-cat-staples-26",
+          "productName": "Penne Pasta Value 6",
+          "productImage": "https://images.unsplash.com/photo-1551462147-ff29053bfc14?q=80&w=600&auto=format&fit=crop",
+          "price": 1.04,
+          "quantity": 1,
+          "unit": "500 g"
+        }
+      ],
+      "subtotal": 1.04,
+      "discount": 0,
+      "tax": 0.05,
+      "deliveryFee": 2.99,
+      "total": 4.08,
+      "status": "Pending",
+      "paymentMethod": "COD",
+      "paymentStatus": "Pending",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T08:51:28.926Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T08:51:28.926Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ]
+    },
+    {
+      "id": "ORD-74897",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-eth3ji1",
+          "productId": "prod-dynamic-cat-staples-115",
+          "productName": "Basmati Rice Premium Value 24",
+          "productImage": "https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=600&auto=format&fit=crop",
+          "price": 11.2,
+          "quantity": 1,
+          "unit": "5 kg"
+        }
+      ],
+      "subtotal": 11.2,
+      "discount": 0,
+      "tax": 0.56,
+      "deliveryFee": 2.99,
+      "total": 14.75,
+      "status": "Pending",
+      "paymentMethod": "COD",
+      "paymentStatus": "Pending",
+      "address": {
+        "id": "addr-cfk0p62",
+        "label": "Home",
+        "fullName": "gughan",
+        "house": "bb igigyv uyvugug",
+        "street": "bb igigyv uyvugug",
+        "city": "bhbuyvuvutvttycycyccc",
+        "state": "cycyrccyfhcfchfchc",
+        "pincode": "560034",
+        "postalCode": "560034",
+        "phone": "9876543210",
+        "country": "vgvvhhchfchch"
+      },
+      "createdAt": "2026-05-27T08:45:56.012Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T08:45:56.012Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ]
+    },
+    {
       "id": "ORD-33568",
       "userId": "user-google-h164ymt4",
       "userEmail": "gughan4912@gmail",
@@ -10267,6 +10511,32 @@
         "state": "dugdhoguhosdh",
         "pincode": "560034",
         "phone": "+919876543215"
+      },
+      {
+        "id": "addr-cfk0p62",
+        "label": "Home",
+        "fullName": "gughan",
+        "house": "bb igigyv uyvugug",
+        "street": "bb igigyv uyvugug",
+        "city": "bhbuyvuvutvttycycyccc",
+        "state": "cycyrccyfhcfchfchc",
+        "pincode": "560034",
+        "postalCode": "560034",
+        "phone": "9876543210",
+        "country": "vgvvhhchfchch"
+      },
+      {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
       }
     ],
     "user-google-w4evn4xt": [
@@ -10304,6 +10574,26 @@
         "id": "addr-qqr5qvn",
         "label": "Home",
         "fullName": "willis",
+        "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
+        "city": "coimbatore",
+        "state": "Tamil Nadu",
+        "pincode": "641037",
+        "phone": "9629306611"
+      },
+      {
+        "id": "addr-eo6wx5l",
+        "label": "Home",
+        "fullName": "willi",
+        "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
+        "city": "bengal",
+        "state": "Tamil Nadu",
+        "pincode": "641037",
+        "phone": "9629306611"
+      },
+      {
+        "id": "addr-nc5sks9",
+        "label": "Home",
+        "fullName": "figh",
         "street": "3/73 Sri Ramapuram Bharathiyar road,PN palayam,coimbatore 641037",
         "city": "coimbatore",
         "state": "Tamil Nadu",

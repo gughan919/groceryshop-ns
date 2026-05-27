@@ -418,21 +418,34 @@ app.get('/api/addresses', authenticate, (req: Request, res: Response) => {
 
 app.post('/api/addresses', authenticate, (req: Request, res: Response) => {
   const userId = (req as any).user.id;
-  const { label, fullName, street, city, state, pincode, phone } = req.body;
+  const { label, fullName, street, house, city, state, pincode, postalCode, postal_code, phone, country, Country, countryName, country_code } = req.body;
+  const resolvedPostalCode = pincode ?? postalCode ?? postal_code;
+  const resolvedStreet = street ?? house;
+  const resolvedCountry = country ?? Country ?? countryName ?? country_code;
 
-  if (!label || !fullName || !street || !city || !state || !pincode || !phone) {
-    return res.status(400).json({ error: 'All address parameters must be set.' });
+  const normalizedAddress = {
+    label: String(label || '').trim(),
+    fullName: String(fullName || '').trim(),
+    house: String(house || '').trim(),
+    street: String(resolvedStreet || '').trim(),
+    city: String(city || '').trim(),
+    state: String(state || '').trim(),
+    pincode: String(resolvedPostalCode || '').trim(),
+    postalCode: String(resolvedPostalCode || '').trim(),
+    phone: String(phone || '').trim(),
+    country: String(resolvedCountry || '').trim()
+  };
+
+  if (!normalizedAddress.country) {
+    return res.status(400).json({ error: 'Please select country.' });
+  }
+  if (!normalizedAddress.label || !normalizedAddress.fullName || !normalizedAddress.street || !normalizedAddress.city || !normalizedAddress.state || !normalizedAddress.pincode || !normalizedAddress.phone) {
+    return res.status(400).json({ error: 'Full name, phone, house/street, city, state, postal code, and country are required.' });
   }
 
   const newAddress: Address = {
     id: 'addr-' + Math.random().toString(36).substring(2, 9),
-    label,
-    fullName,
-    street,
-    city,
-    state,
-    pincode,
-    phone
+    ...normalizedAddress
   };
 
   dbService.addAddress(userId, newAddress);
@@ -507,10 +520,47 @@ app.post('/api/coupons/validate', authenticate, (req: Request, res: Response) =>
 app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const { items, subtotal, discount, couponCode, address, paymentMethod, clientToken, clientOrigin } = req.body;
+    const { items, couponCode, address, paymentMethod, deliverySlot, clientToken, clientOrigin } = req.body;
 
-    if (!items || items.length === 0 || !address) {
+    if (!Array.isArray(items) || items.length === 0 || !address) {
       return res.status(400).json({ error: 'Items bag and delivery address must be specified.' });
+    }
+    if (paymentMethod !== 'COD' && paymentMethod !== 'Razorpay' && paymentMethod !== 'Stripe') {
+      return res.status(400).json({ error: 'Select a valid payment method before checkout.' });
+    }
+
+    console.log('[CHECKOUT ADDRESS INPUT]', address);
+    const resolvedPostalCode = address.pincode ?? address.postalCode ?? address.postal_code ?? address.zip;
+    const resolvedStreet = address.street ?? address.house ?? address.addressLine1;
+    const resolvedCountry = address.country ?? address.Country ?? address.countryName ?? address.country_code;
+    const normalizedAddress: Address = {
+      id: String(address.id || '').trim(),
+      label: String(address.label || 'Home').trim(),
+      fullName: String(address.fullName || '').trim(),
+      house: String(address.house || '').trim(),
+      street: String(resolvedStreet || '').trim(),
+      city: String(address.city || '').trim(),
+      state: String(address.state || '').trim(),
+      pincode: String(resolvedPostalCode || '').trim(),
+      postalCode: String(resolvedPostalCode || '').trim(),
+      phone: String(address.phone || '').trim(),
+      country: String(resolvedCountry || '').trim()
+    };
+    console.log('[CHECKOUT ADDRESS NORMALIZED]', normalizedAddress);
+    const missingAddressFields = [
+      ['full name', normalizedAddress.fullName],
+      ['phone number', normalizedAddress.phone],
+      ['house/street', normalizedAddress.street],
+      ['city', normalizedAddress.city],
+      ['state', normalizedAddress.state],
+      ['postal code', normalizedAddress.pincode],
+      ['country', normalizedAddress.country]
+    ].filter(([, value]) => !String(value).trim()).map(([field]) => field);
+    if (missingAddressFields.length > 0) {
+      if (missingAddressFields.includes('country')) {
+        return res.status(400).json({ error: 'Please select country.' });
+      }
+      return res.status(400).json({ error: `Please complete delivery address: ${missingAddressFields.join(', ')}.` });
     }
 
     // Server-side recalculations to avoid client modifications
@@ -522,8 +572,20 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       if (!dbProd) {
         throw new Error(`Product ${clientItem.productName} not found in store registry.`);
       }
-      const itemFinalUnitPrice = dbProd.price * (1 - dbProd.discount / 100);
-      computedSubtotal += itemFinalUnitPrice * clientItem.quantity;
+      const quantity = Math.floor(Number(clientItem.quantity));
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Invalid quantity for ${dbProd.name}.`);
+      }
+      if (dbProd.stock < quantity) {
+        throw new Error(`Insufficient stock for ${dbProd.name}. Remaining: ${dbProd.stock}`);
+      }
+      const basePrice = Number(dbProd.price);
+      const discountPercent = Math.min(100, Math.max(0, Number(dbProd.discount) || 0));
+      if (!Number.isFinite(basePrice) || basePrice <= 0) {
+        throw new Error(`Invalid price configured for ${dbProd.name}.`);
+      }
+      const itemFinalUnitPrice = basePrice * (1 - discountPercent / 100);
+      computedSubtotal += itemFinalUnitPrice * quantity;
 
       return {
         id: 'item-' + Math.random().toString(36).substring(2, 9),
@@ -531,7 +593,7 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
         productName: dbProd.name,
         productImage: dbProd.image,
         price: Number(itemFinalUnitPrice.toFixed(2)),
-        quantity: clientItem.quantity,
+        quantity,
         unit: dbProd.unit
       };
     });
@@ -549,9 +611,19 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
     }
 
     // Set flat delivery fee (£2.99 or free if over £20.00)
-    const deliveryFee = computedSubtotal >= 20 ? 0 : 2.99;
+    couponDiscountAmount = Math.min(computedSubtotal, Math.max(0, couponDiscountAmount));
+    const deliveryFeeBySlot: Record<string, number> = {
+      express: 2.99,
+      evening: 1.49,
+      scheduled: 0
+    };
+    const selectedDeliverySlot = deliverySlot === 'evening' || deliverySlot === 'scheduled' ? deliverySlot : 'express';
+    const deliveryFee = computedSubtotal >= 20 ? 0 : deliveryFeeBySlot[selectedDeliverySlot];
     const tax = Number((computedSubtotal * 0.05).toFixed(2)); // 5% VAT
     const total = Number((computedSubtotal - couponDiscountAmount + tax + deliveryFee).toFixed(2));
+    if (!Number.isFinite(total) || total <= 0) {
+      return res.status(400).json({ error: 'Checkout total must be greater than zero for a non-empty cart.' });
+    }
 
     const orderId = 'ORD-' + Math.floor(10000 + Math.random() * 90000).toString();
     const newOrder: Order = {
@@ -569,7 +641,7 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       status: 'Pending',
       paymentMethod,
       paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Paid',
-      address,
+      address: normalizedAddress,
       createdAt: new Date().toISOString(),
       timeline: [
         { status: 'Pending', time: new Date().toISOString(), description: 'Groceries order authorized. Nammashop team preparing dispatch.' }
