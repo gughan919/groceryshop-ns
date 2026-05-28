@@ -1,11 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  CheckCircle2, 
-  Truck, 
   ShoppingBag, 
   MapPin, 
-  ArrowRight, 
   Download, 
   HelpCircle, 
   Phone, 
@@ -16,11 +13,9 @@ import {
   Sparkles, 
   ChevronDown, 
   ChevronUp, 
-  RefreshCw,
-  Clock,
-  ExternalLink,
-  MessageSquare,
-  AlertCircle
+  CreditCard,
+  Calendar,
+  Truck
 } from 'lucide-react';
 import { Order, Product, User } from '../types';
 
@@ -34,8 +29,7 @@ interface OrderSuccessViewProps {
   currentUser?: User | null;
   token?: string | null;
   onNavigateToProducts: () => void;
-  onTrackLiveDispatch: () => void;
-  onNavigateToOrders?: () => void;
+  onTrackOrder: () => void;
 }
 
 export default function OrderSuccessView({
@@ -46,13 +40,11 @@ export default function OrderSuccessView({
   currentUser,
   token,
   onNavigateToProducts,
-  onTrackLiveDispatch,
-  onNavigateToOrders
+  onTrackOrder
 }: OrderSuccessViewProps) {
   const [copiedId, setCopiedId] = useState(false);
   const [itemsExpanded, setItemsExpanded] = useState(true);
   const [liveOrder, setLiveOrder] = useState<Order>(order);
-  const [isLiveRefreshing, setIsLiveRefreshing] = useState(false);
   const [addedItems, setAddedItems] = useState<Record<string, boolean>>({});
 
   // Sync state if order prop changes
@@ -67,33 +59,8 @@ export default function OrderSuccessView({
     y: Math.random() * 100, // percentage top
     size: Math.random() * 8 + 4, // size in px
     delay: Math.random() * 1.5,
-    color: ['text-emerald-400', 'text-yellow-400', 'text-amber-400', 'text-teal-300'][idx % 4]
+    color: ['text-red-300', 'text-red-300', 'text-amber-400', 'text-red-300'][idx % 4]
   }));
-
-  // Fetch live order details if a token exists to update delivery progress live
-  const handleLiveSync = async () => {
-    if (!token) return;
-    setIsLiveRefreshing(true);
-    try {
-      const resp = await fetch('/api/orders', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (resp.ok) {
-        const list: Order[] = await resp.json();
-        const found = list.find(o => o.id === liveOrder.id);
-        if (found) {
-          setLiveOrder(found);
-          if (notifyUser) {
-            notifyUser('Latest delivery dispatch coordinates updated successfully!', 'success');
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Silent live synchronization fallback:', err);
-    } finally {
-      setIsLiveRefreshing(false);
-    }
-  };
 
   const handleCopyOrderId = () => {
     navigator.clipboard.writeText(liveOrder.id);
@@ -141,19 +108,6 @@ export default function OrderSuccessView({
     }
   };
 
-  // Compute dynamic timeline steps from Order object
-  const timelineSteps = liveOrder.timeline.map((step, index) => ({
-    title: step.status,
-    timeLabel: new Date(step.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    description: step.description,
-    isCompleted: index < liveOrder.timeline.findIndex(s => s.status === liveOrder.status) + 1,
-    isActive: step.status === liveOrder.status
-  }));
-  
-  // Ensure we have at least 4 steps for layout consistency if needed, 
-  // but mapping directly to the actual timeline history is better
-  const orderStatus = liveOrder.status; // 'Pending' | 'Shipped' | 'Delivered' | 'Cancelled'
-
   // Pick up 4 in-stock, relevant products to recommend (avoiding ones already bought where possible)
   const purchasedProductIds = liveOrder.items.map(it => it.productId);
   const recommendedItems = products
@@ -169,6 +123,30 @@ export default function OrderSuccessView({
   ];
 
   const finalRecommendations = recommendedItems.length > 0 ? recommendedItems : defaultRecommendations;
+  const orderDate = liveOrder.createdAt ? new Date(liveOrder.createdAt) : new Date();
+  const estimatedDeliveryDate = new Date(orderDate);
+  estimatedDeliveryDate.setDate(orderDate.getDate() + 1);
+  const formatDateTime = (date: Date) => date.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  const deliveryAddress = [
+    liveOrder.address?.fullName,
+    liveOrder.address?.street,
+    [liveOrder.address?.city, liveOrder.address?.state, liveOrder.address?.pincode].filter(Boolean).join(', '),
+    liveOrder.address?.country
+  ].filter(Boolean).join(' • ') || 'Delivery address unavailable';
+  const summaryRows = [
+    { icon: ShoppingBag, label: 'Order ID', value: `#${liveOrder.id || 'AUTO_GENERATED'}` },
+    { icon: CreditCard, label: 'Payment Status', value: liveOrder.paymentStatus === 'Paid' ? 'Successful' : liveOrder.paymentStatus || 'Successful' },
+    { icon: Calendar, label: 'Order Date', value: formatDateTime(orderDate) },
+    { icon: Truck, label: 'Estimated Delivery', value: formatDateTime(estimatedDeliveryDate) },
+    { icon: MapPin, label: 'Delivery Address', value: deliveryAddress },
+    { icon: ShieldCheck, label: 'Total Amount', value: `£${Number(liveOrder.total || 0).toFixed(2)}` }
+  ];
 
   // Render nicely
   return (
@@ -205,29 +183,6 @@ export default function OrderSuccessView({
 
       <div className="max-w-4xl mx-auto space-y-8 relative z-10">
         
-        {/* TOP STATUS HERO BAR */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white dark:bg-slate-900/80 backdrop-blur-md rounded-2xl border border-slate-100 dark:border-slate-800 p-4 shadow-3xs">
-          <div className="flex items-center gap-2.5 text-xs text-slate-500 font-medium">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>Real-time Secure Connection Active</span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleLiveSync}
-              disabled={isLiveRefreshing}
-              className="px-3.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 disabled:opacity-50 transition-all rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-            >
-              <RefreshCw size={12} className={`${isLiveRefreshing ? 'animate-spin' : ''}`} />
-              <span>{isLiveRefreshing ? 'Syncing...' : 'Sync Live Status'}</span>
-            </button>
-
-            <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2.5 py-1 rounded-lg border border-emerald-100 uppercase tracking-wider">
-              10-Min Speed Route Approved
-            </span>
-          </div>
-        </div>
-
         {/* CELEBRATION CARD */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -236,7 +191,7 @@ export default function OrderSuccessView({
           className="bg-white rounded-3xl border border-slate-200 dark:border-slate-700/80 p-6 sm:p-10 text-center relative shadow-sm overflow-hidden"
         >
           {/* Subtle corner patterns for luxury look */}
-          <div className="absolute top-0 right-0 h-32 w-32 bg-radial from-emerald-100/30 to-transparent pointer-events-none rounded-full blur-2xl"></div>
+          <div className="absolute top-0 right-0 h-32 w-32 bg-radial from-red-100/30 to-transparent pointer-events-none rounded-full blur-2xl"></div>
           <div className="absolute -bottom-8 -left-8 h-32 w-32 bg-radial from-amber-100/30 to-transparent pointer-events-none rounded-full blur-2xl"></div>
 
           <div className="space-y-6">
@@ -247,10 +202,10 @@ export default function OrderSuccessView({
                 initial={{ opacity: 0, scale: 0.5 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ type: 'spring', stiffness: 200, damping: 15 }}
-                className="h-24 w-24 bg-emerald-50 rounded-full flex items-center justify-center border border-emerald-100 relative z-15"
+                className="h-24 w-24 bg-red-50 rounded-full flex items-center justify-center border border-red-100 relative z-15"
               >
                 <motion.svg
-                  className="w-12 h-12 text-emerald-600"
+                  className="w-12 h-12 text-[#ff2d2d]"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -271,12 +226,12 @@ export default function OrderSuccessView({
               <motion.div
                 animate={{ scale: [1, 1.4, 1.6, 1.4, 1], opacity: [0.1, 0.4, 0, 0.4, 0.1] }}
                 transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
-                className="absolute inset-0 border-2 border-emerald-500 rounded-full bg-emerald-100/5 z-0 pointer-events-none scale-110"
+                className="absolute inset-0 border-2 border-[#ff2d2d] rounded-full bg-red-100/5 z-0 pointer-events-none scale-110"
               />
             </div>
 
             <div className="space-y-2 max-w-lg mx-auto">
-              <span className="text-xs bg-emerald-100 text-emerald-800 font-extrabold px-3 py-1 rounded-full uppercase tracking-widest inline-block text-center mb-1">
+              <span className="text-xs bg-red-100 text-red-700 font-extrabold px-3 py-1 rounded-full uppercase tracking-widest inline-block text-center mb-1">
                 Authorized checkout passed
               </span>
               <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight">
@@ -300,17 +255,17 @@ export default function OrderSuccessView({
                     className="p-1 hover:bg-slate-200/80 rounded transition-colors text-slate-400 hover:text-slate-700"
                     title="Copy Order ID"
                   >
-                    {copiedId ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                    {copiedId ? <Check size={13} className="text-[#ff2d2d]" /> : <Copy size={13} />}
                   </button>
                 </div>
               </div>
 
-              {/* Estimated Speed Time */}
+              {/* Payment status */}
               <div className="flex flex-col justify-center items-center py-2 sm:py-0">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Estimated Slot</span>
-                <div className="flex items-center gap-1 text-emerald-700 font-extrabold text-sm sm:text-base">
-                  <Clock size={15} />
-                  <span>8 - 10 Minutes</span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Payment Status</span>
+                <div className="flex items-center gap-1 text-[#ff2d2d] font-extrabold text-sm sm:text-base">
+                  <CreditCard size={15} />
+                  <span>{liveOrder.paymentStatus}</span>
                 </div>
               </div>
 
@@ -325,131 +280,96 @@ export default function OrderSuccessView({
           </div>
         </motion.div>
 
-        {/* INTERACTIVE DELIVERY PROGRESS SECTIONS */}
+        {/* ORDER DETAILS */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
-          {/* LEFT 2 COLS: DELIVERY STATUS ROUTE TIMELINE */}
+          {/* LEFT 2 COLS: CONFIRMATION AND SUPPORT */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-3xs">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-extrabold text-slate-900 text-md sm:text-lg tracking-tight">Rapid Delivery Timeline</h3>
-                  <p className="text-xs text-slate-400">Live progress report of your organic items dispatch.</p>
-                </div>
-                <span className={`px-2.5 py-1 text-[10px] font-extrabold rounded-lg border uppercase tracking-wider ${
-                  orderStatus === 'Delivered' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                  orderStatus === 'Cancelled' ? 'bg-rose-50 text-rose-700 border-rose-100' :
-                  'bg-amber-50 text-amber-700 border-amber-100 animate-pulse'
-                }`}>
-                  Status: {orderStatus}
-                </span>
-              </div>
-
-              {/* TIMELINE TRACKING PROGRESS */}
-              {orderStatus === 'Cancelled' ? (
-                <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 text-rose-800 text-xs">
-                  <AlertCircle size={20} className="shrink-0" />
+            <motion.div
+              initial={{ opacity: 0, y: 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, ease: 'easeOut' }}
+              className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-3xs space-y-5"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-2xl bg-red-50 border border-red-100 text-[#ff2d2d] flex items-center justify-center shrink-0">
+                    <Check size={22} className="stroke-[3]" />
+                  </div>
                   <div>
-                    <h5 className="font-bold">This order has been cancelled</h5>
-                    <p className="text-slate-500 mt-0.5">Item stock reservation has been released and payment has been marked for reversal.</p>
+                    <span className="text-[10px] bg-red-50 text-[#ff2d2d] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-widest inline-block">
+                      Order Confirmed
+                    </span>
+                    <h3 className="font-extrabold text-slate-900 text-lg tracking-tight mt-1">Order Summary</h3>
                   </div>
                 </div>
-              ) : (
-                <div className="relative pl-6 space-y-8 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[2px] before:bg-slate-100">
-                  
-                  {timelineSteps.map((step, idx) => (
-                    <div key={idx} className="relative flex gap-4 text-xs">
-                      
-                      {/* Checkpoint Dot Marker */}
-                      <div className="absolute -left-[27px] top-0.5 z-10 flex items-center justify-center">
-                        {step.isCompleted ? (
-                          <div className="h-6 w-6 rounded-full bg-emerald-500 border-4 border-white text-white flex items-center justify-center shadow-sm">
-                            <Check size={10} className="stroke-[3]" />
-                          </div>
-                        ) : step.isActive ? (
-                          <div className="h-6 w-6 rounded-full bg-amber-400 border-4 border-white text-white flex items-center justify-center shadow-3xs relative">
-                            <span className="absolute inset-0 rounded-full animate-ping bg-amber-400/30"></span>
-                            <div className="h-2 w-2 rounded-full bg-white"></div>
-                          </div>
-                        ) : (
-                          <div className="h-6 w-6 rounded-full bg-slate-200 border-4 border-white text-white flex items-center justify-center">
-                            <div className="h-1.5 w-1.5 rounded-full bg-slate-400"></div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex-1 space-y-1 bg-slate-50/50 p-3 rounded-xl border border-slate-100 hover:border-slate-200 transition-colors">
-                        <div className="flex items-center justify-between">
-                          <h4 className={`font-bold text-sm ${step.isCompleted ? 'text-emerald-800' : 'text-slate-800'}`}>
-                            {step.title}
-                          </h4>
-                          <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md">
-                            {step.timeLabel}
-                          </span>
-                        </div>
-                        <p className="text-slate-500 text-xs leading-relaxed">{step.description}</p>
-                      </div>
-
-                    </div>
-                  ))}
-
-                </div>
-              )}
-
-              {/* DELIVERY EXECUTIVE DETAIL STRIP */}
-              <div className="bg-gradient-to-tr from-slate-900 to-slate-800 text-white rounded-2xl p-5 shadow-sm space-y-4">
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
-                    <img 
-                      src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&q=80" 
-                      alt="Rider" 
-                      className="h-11 w-11 object-cover rounded-full border border-white/20 shadow"
-                    />
-                    <div>
-                      <h4 className="font-bold text-sm text-yellow-300">Shiva Shankar</h4>
-                      <p className="text-[10px] text-slate-300">Your Assigned Premium Rider</p>
-                    </div>
-                  </div>
-
-                  <div className="text-right">
-                    <span className="text-[9px] bg-white/10 px-2.5 py-1 rounded-full uppercase tracking-wider text-slate-300">Vehicle Scooter</span>
-                    <p className="font-bold text-xs mt-1">KA-03-HL-1090 (Electric)</p>
-                  </div>
-                </div>
-
-                <div className="border-t border-white/10 pt-3.5 flex items-center justify-between text-xs text-slate-300">
-                  <div className="flex items-center gap-1.5 text-yellow-300">
-                    <ShieldCheck size={14} />
-                    <span>Secure delivery verification Code PIN:</span>
-                    <strong className="font-mono bg-white/15 px-2 py-0.5 rounded tracking-widest text-white text-xs">
-                      {liveOrder.id ? liveOrder.id.replace(/\D/g, '').slice(0, 4) || '3948' : '3948'}
-                    </strong>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <a href="tel:+9180706050" className="p-2 bg-white/5 hover:bg-white/10 text-slate-200 rounded-lg transition-all" title="Call Rider">
-                      <Phone size={13} />
-                    </a>
-                  </div>
-                </div>
+                <button 
+                  onClick={handleCopyOrderId} 
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-50 transition-all"
+                >
+                  {copiedId ? <Check size={13} className="text-[#ff2d2d]" /> : <Copy size={13} />}
+                  <span>{copiedId ? 'Copied' : 'Copy ID'}</span>
+                </button>
               </div>
 
-            </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {summaryRows.map((row) => {
+                  const Icon = row.icon;
+                  return (
+                    <div key={row.label} className={`rounded-2xl border border-slate-100 bg-slate-50/60 p-4 text-xs ${row.label === 'Delivery Address' ? 'sm:col-span-2' : ''}`}>
+                      <div className="flex items-start gap-3">
+                        <div className="h-8 w-8 rounded-xl bg-white border border-slate-100 text-[#ff2d2d] flex items-center justify-center shrink-0">
+                          <Icon size={15} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">{row.label}</p>
+                          <p className="mt-1 break-words font-bold text-slate-800 leading-relaxed">{row.value}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <button
+                  onClick={handleDownloadInvoice}
+                  className="inline-flex items-center justify-center gap-1.5 bg-[#ff2d2d] hover:bg-[#e12626] text-white font-bold py-3 px-4 rounded-2xl text-xs transition-all cursor-pointer shadow-sm active:scale-98"
+                >
+                  <Download size={14} />
+                  <span>Download Invoice</span>
+                </button>
+                <button
+                  onClick={onTrackOrder}
+                  className="inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-4 rounded-2xl text-xs transition-all cursor-pointer shadow-sm active:scale-98"
+                >
+                  <Truck size={14} />
+                  <span>Track Order</span>
+                </button>
+                <button
+                  onClick={onNavigateToProducts}
+                  className="inline-flex items-center justify-center gap-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-bold py-3 px-4 rounded-2xl text-xs transition-all cursor-pointer active:scale-98"
+                >
+                  <ShoppingBag size={14} />
+                  <span>Continue Shopping</span>
+                </button>
+              </div>
+            </motion.div>
 
             {/* EMAIL PORTAL CONFIRMATION BANNER */}
-            <div className="bg-emerald-50/50 border border-emerald-100/60 rounded-3xl p-5 flex flex-col sm:flex-row items-center gap-4 text-xs text-emerald-800">
-              <div className="h-10 w-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 shrink-0">
+            <div className="bg-red-50/50 border border-red-100/60 rounded-3xl p-5 flex flex-col sm:flex-row items-center gap-4 text-xs text-red-700">
+              <div className="h-10 w-10 bg-red-100 rounded-full flex items-center justify-center text-[#ff2d2d] shrink-0">
                 <Mail size={18} />
               </div>
               <div className="flex-1 text-center sm:text-left">
                 <h5 className="font-bold text-sm">Email Confirmation Outstanding</h5>
                 <p className="text-slate-500 mt-1">
-                  We have dispatched a receipt of invoice order confirmation to: <strong className="text-emerald-900 underline font-semibold break-all">{liveOrder.userEmail || currentUser?.email || 'mjjayan2007@gmail.com'}</strong>
+                  We have dispatched a receipt of invoice order confirmation to: <strong className="text-red-800 underline font-semibold break-all">{liveOrder.userEmail || currentUser?.email || 'mjjayan2007@gmail.com'}</strong>
                 </p>
               </div>
               <button
                 onClick={handleDownloadInvoice}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-2 rounded-xl text-[10px] tracking-wide cursor-pointer transition-colors flex items-center gap-1 shrink-0"
+                className="bg-[#ff2d2d] hover:bg-[#e12626] text-white font-bold px-3.5 py-2 rounded-xl text-[10px] tracking-wide cursor-pointer transition-colors flex items-center gap-1 shrink-0"
               >
                 <Download size={11} />
                 <span>Download PDF</span>
@@ -469,7 +389,7 @@ export default function OrderSuccessView({
 
               <div className="text-xs space-y-2 text-slate-600 dark:text-slate-400 leading-relaxed">
                 <div>
-                  <span className="font-bold text-[9px] text-emerald-800 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full uppercase tracking-wider inline-block">
+                  <span className="font-bold text-[9px] text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full uppercase tracking-wider inline-block">
                     {liveOrder.address.label || 'Home'} Destination
                   </span>
                   <h5 className="font-black text-slate-800 text-sm mt-1">{liveOrder.address.fullName}</h5>
@@ -550,7 +470,7 @@ export default function OrderSuccessView({
                 </div>
 
                 {liveOrder.discount > 0 && (
-                  <div className="flex justify-between text-emerald-600">
+                  <div className="flex justify-between text-[#ff2d2d]">
                     <span className="flex items-center gap-1">Deducted Coupon: {liveOrder.couponCode ? `[${liveOrder.couponCode}]` : ''}</span>
                     <span className="font-mono font-bold">-£{liveOrder.discount.toFixed(2)}</span>
                   </div>
@@ -565,7 +485,7 @@ export default function OrderSuccessView({
                   <span>Eco Dispatch Delivery Fee</span>
                   <span className="font-mono">
                     {liveOrder.deliveryFee === 0 ? (
-                      <strong className="text-emerald-700 font-bold uppercase">FREE</strong>
+                      <strong className="text-[#ff2d2d] font-bold uppercase">FREE</strong>
                     ) : (
                       `£${liveOrder.deliveryFee.toFixed(2)}`
                     )}
@@ -574,7 +494,7 @@ export default function OrderSuccessView({
 
                 <div className="border-t border-slate-100 pt-3 mt-3 flex justify-between font-extrabold text-slate-800 text-sm">
                   <span>Grand Total Settled</span>
-                  <span className="font-mono text-emerald-700 text-base">£{liveOrder.total.toFixed(2)}</span>
+                  <span className="font-mono text-[#ff2d2d] text-base">£{liveOrder.total.toFixed(2)}</span>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 text-[10px] text-slate-400 text-center flex items-center justify-center gap-1">
@@ -590,7 +510,7 @@ export default function OrderSuccessView({
         {/* CUSTOMERS ALSO PURCHASED: RECOMMENDED PRODUCTS */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-3xs">
           <div>
-            <span className="text-[10px] bg-emerald-50 text-emerald-700 font-extrabold px-2.5 py-1 rounded-full uppercase tracking-widest inline-block">
+            <span className="text-[10px] bg-red-50 text-[#ff2d2d] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-widest inline-block">
               Forgot anything?
             </span>
             <h3 className="font-extrabold text-slate-900 text-md sm:text-lg tracking-tight mt-1.5">Customers Also Purchased</h3>
@@ -601,7 +521,7 @@ export default function OrderSuccessView({
             {finalRecommendations.map((prod) => (
               <div 
                 key={prod.id} 
-                className="bg-slate-50 border border-slate-100 rounded-2xl p-3 flex flex-col justify-between hover:border-emerald-300 hover:shadow-3xs transition-all text-xs"
+                className="bg-slate-50 border border-slate-100 rounded-2xl p-3 flex flex-col justify-between hover:border-red-200 hover:shadow-3xs transition-all text-xs"
               >
                 <div>
                   <img
@@ -620,7 +540,7 @@ export default function OrderSuccessView({
                   <button
                     onClick={() => handleQuickAdd(prod.id)}
                     disabled={!!addedItems[prod.id]}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg hover:shadow-3xs transition-all cursor-pointer disabled:bg-emerald-800 disabled:opacity-80"
+                    className="bg-[#ff2d2d] hover:bg-[#e12626] text-white text-[10px] font-bold py-1.5 px-3 rounded-lg hover:shadow-3xs transition-all cursor-pointer disabled:bg-[#b91c1c] disabled:opacity-80"
                   >
                     {addedItems[prod.id] ? 'Added ✔' : '+ Add'}
                   </button>
@@ -635,7 +555,7 @@ export default function OrderSuccessView({
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
               <h4 className="font-extrabold text-white text-md sm:text-lg tracking-tight flex items-center gap-2">
-                <HelpCircle className="text-emerald-400" size={20} />
+                <HelpCircle className="text-red-300" size={20} />
                 <span>Need immediate checkout assistance?</span>
               </h4>
               <p className="text-xs text-slate-400 mt-1">Our certified instant organic support companion and dispatch coordinators are online 24/7.</p>
@@ -653,7 +573,7 @@ export default function OrderSuccessView({
 
               <a 
                 href="tel:+442070000000" 
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                className="px-4 py-2 bg-[#ff2d2d] hover:bg-[#e12626] text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
                 title="Direct voice call link"
               >
                 <Phone size={12} />
@@ -662,10 +582,10 @@ export default function OrderSuccessView({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-white/10 pt-4 border-t border-white/10 gap-3 text-xs text-slate-400 leading-normal">
+          <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/10 pt-4 border-t border-white/10 gap-3 text-xs text-slate-400 leading-normal">
             
             <div className="py-2.5 sm:py-0 sm:pr-4 flex gap-2">
-              <div className="h-7 w-7 bg-white/5 rounded-lg flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+              <div className="h-7 w-7 bg-white/5 rounded-lg flex items-center justify-center text-red-300 shrink-0 mt-0.5">
                 <ShieldCheck size={14} />
               </div>
               <div>
@@ -674,63 +594,21 @@ export default function OrderSuccessView({
               </div>
             </div>
 
-            <div className="py-2.5 sm:py-0 sm:px-4 flex gap-2">
-              <div className="h-7 w-7 bg-white/5 rounded-lg flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-                <Clock size={14} />
-              </div>
-              <div>
-                <h5 className="font-bold text-slate-200">10-Minute Target Guarantee</h5>
-                <p className="text-[11px] mt-0.5 text-slate-400">If delayed past 15 minutes, claim automatic delivery fee reversal credits.</p>
-              </div>
-            </div>
-
             <div className="py-2.5 sm:py-0 sm:pl-4 flex gap-2">
-              <div className="h-7 w-7 bg-white/5 rounded-lg flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-                <MessageSquare size={14} />
+              <div className="h-7 w-7 bg-white/5 rounded-lg flex items-center justify-center text-red-300 shrink-0 mt-0.5">
+                <Phone size={14} />
               </div>
               <div>
-                <h5 className="font-bold text-slate-200">Live AI Assistant Companion</h5>
-                <p className="text-[11px] mt-0.5 text-slate-400">Ask the companion to change shipping preferences, add voice notes, or request delivery delays.</p>
+                <h5 className="font-bold text-slate-200">Support Available</h5>
+                <p className="text-[11px] mt-0.5 text-slate-400">Order, invoice, and product assistance stay available through email and hotline support.</p>
               </div>
             </div>
 
           </div>
-        </div>
-
-        {/* BOTTOM ACTION BUTTONS */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100">
-          
-          <button
-            onClick={onNavigateToProducts}
-            className="w-full sm:w-auto px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-2xl transition-all cursor-pointer active:scale-98 flex items-center justify-center gap-1.5"
-          >
-            <ShoppingBag size={14} />
-            <span>Continue Shopping Shelves</span>
-          </button>
-
-          <div className="flex flex-col sm:flex-row gap-2.5 w-full sm:w-auto">
-            {onNavigateToOrders && (
-              <button
-                onClick={onNavigateToOrders}
-                className="px-5 py-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-2xl transition-all cursor-pointer active:scale-98 flex items-center justify-center gap-1.5"
-              >
-                <span>View My Orders List</span>
-              </button>
-            )}
-
-            <button
-              onClick={onTrackLiveDispatch}
-              className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-2xl text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm active:scale-98"
-            >
-              <Truck size={14} />
-              <span>Track Delivery live</span>
-              <ArrowRight size={13} className="ml-0.5" />
-            </button>
-          </div>
-
         </div>
 
       </div>
     </div>
   );
 }
+

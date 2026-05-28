@@ -1,0 +1,54 @@
+{
+  "id": "ORD-44122",
+  "userId": "user-google-5lc3b5ff",
+  "userEmail": "gughan4912@gmail.com",
+  "userName": "gug han",
+  "items": [
+    {
+      "id": "item-okch1f8",
+      "productId": "prod-dynamic-cat-staples-115",
+      "productName": "Basmati Rice Premium Value 24",
+      "productImage": "https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=600&auto=format&fit=crop",
+      "price": 11.2,
+      "quantity": 1,
+      "unit": "5 kg"
+    }
+  ],
+  "subtotal": 11.2,
+  "discount": 0,
+  "tax": 0.56,
+  "deliveryFee": 2.99,
+  "total": 14.75,
+  "status": "Pending",
+  "paymentMethod": "Stripe",
+  "paymentStatus": "Paid",
+  "address": {
+    "id": "addr-cfk0p62",
+    "label": "Home",
+    "fullName": "gughan",
+    "house": "bb igigyv uyvugug",
+    "street": "bb igigyv uyvugug",
+    "city": "bhbuyvuvutvttycycyccc",
+    "state": "cycyrccyfhcfchfchc",
+    "pincode": "560034",
+    "postalCode": "560034",
+    "phone": "9876543210",
+    "country": "vgvvhhchfchch"
+  },
+  "createdAt": "2026-05-27T13:08:28.519Z",
+  "timeline": [
+    {
+      "status": "Pending",
+      "time": "2026-05-27T13:08:28.519Z",
+      "description": "Groceries order authorized. Nammashop team preparing dispatch."
+    },
+    {
+      "status": "Pending",
+      "time": "2026-05-27T13:09:07.626Z",
+      "description": "Payment status updated to: Paid."
+    }
+  ],
+  "invoiceId": "INV-ORD-44122",
+  "deliveryEstimate": "Express delivery window",
+  "storeLogoUrl": ""
+}

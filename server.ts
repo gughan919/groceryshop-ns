@@ -2,12 +2,13 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createRequire } from 'module';
 import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
 import { dbService, saveDb } from './server/db';
-import { uploadFileToFirebaseStorage } from './server/firebase-server';
+import { getFirebaseServerDb, uploadFileToFirebaseStorage } from './server/firebase-server';
 import { GoogleGenAI, Type } from '@google/genai';
 import { User, Address, Product, Category, Order, Coupon, DashboardBanner, Review } from './src/types';
 import Stripe from 'stripe';
@@ -32,6 +33,60 @@ function getStripe(): Stripe | null {
 
 // Pending Stripe Orders Cache (holds unpaid order payloads until redirection confirmation)
 const PENDING_STRIPE_ORDERS: Record<string, Order> = {};
+const PENDING_RAZORPAY_ORDERS: Record<string, Order> = {};
+
+function getRazorpayCredentials() {
+  const keyId = process.env.VITE_RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !keySecret) return null;
+  return { keyId, keySecret };
+}
+
+async function createRazorpayGatewayOrder(order: Order) {
+  const credentials = getRazorpayCredentials();
+  if (!credentials) {
+    throw new Error('Razorpay credentials are not configured. Set VITE_RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
+  }
+
+  const currency = process.env.RAZORPAY_CURRENCY || 'GBP';
+  const response = await fetch('https://api.razorpay.com/v1/orders', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${Buffer.from(`${credentials.keyId}:${credentials.keySecret}`).toString('base64')}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      amount: Math.round(order.total * 100),
+      currency,
+      receipt: order.id,
+      notes: {
+        orderId: order.id,
+        userId: order.userId
+      }
+    })
+  });
+
+  const payload: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.description || payload?.error?.reason || 'Razorpay order creation failed.');
+  }
+  return payload;
+}
+
+function verifyRazorpaySignature(razorpayOrderId: string, paymentId: string, signature: string) {
+  const credentials = getRazorpayCredentials();
+  if (!credentials) {
+    throw new Error('Razorpay credentials are not configured.');
+  }
+  const expected = crypto
+    .createHmac('sha256', credentials.keySecret)
+    .update(`${razorpayOrderId}|${paymentId}`)
+    .digest('hex');
+
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature);
+  return expectedBuffer.length === signatureBuffer.length && crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+}
 
 // Apply middle-wares
 app.use(express.json({ limit: '10mb' }));
@@ -184,6 +239,60 @@ function isAdminEmail(email?: string) {
   return !!cleaned && (ADMIN_EMAILS.has(cleaned) || cleaned.endsWith('@nammashop.com'));
 }
 
+type VerifiedFirebaseUser = {
+  uid: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+  phone_number?: string;
+};
+
+function getFirebaseWebConfig() {
+  try {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) return null;
+    return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  } catch (error) {
+    console.warn('[AUTH] Unable to read Firebase web config for token fallback verification.', error);
+    return null;
+  }
+}
+
+async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseUser> {
+  try {
+    getFirebaseServerDb();
+    const decoded = await getAdminAuth().verifyIdToken(idToken, true);
+    return decoded;
+  } catch (adminError: any) {
+    const webConfig = getFirebaseWebConfig();
+    const apiKey = webConfig?.apiKey;
+    if (!apiKey) {
+      console.warn('[AUTH] Firebase Admin token verification failed and no web API key fallback is configured.', adminError);
+      throw adminError;
+    }
+
+    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken })
+    });
+    const payload: any = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(payload.users) || payload.users.length === 0) {
+      console.warn('[AUTH] Firebase token fallback verification rejected.', payload?.error || adminError);
+      throw new Error(payload?.error?.message || 'Firebase token verification failed.');
+    }
+
+    const user = payload.users[0];
+    return {
+      uid: user.localId,
+      email: user.email,
+      name: user.displayName,
+      picture: user.photoUrl,
+      phone_number: user.phoneNumber
+    };
+  }
+}
+
 // Middleware: Authenticate User Session
 async function authenticate(req: Request, res: Response, next: any) {
   const authHeader = req.headers.authorization;
@@ -192,7 +301,7 @@ async function authenticate(req: Request, res: Response, next: any) {
   }
   const idToken = authHeader.replace('Bearer ', '').trim();
   try {
-    const decoded = await getAdminAuth().verifyIdToken(idToken, true);
+    const decoded = await verifyFirebaseIdToken(idToken);
     const cleanedEmail = (decoded.email || '').toLowerCase().trim();
     if (!cleanedEmail) return res.status(401).json({ error: 'Authenticated user email not available.' });
     let user = dbService.getUsers().find(u => u.id === decoded.uid || u.email === cleanedEmail) || null;
@@ -234,9 +343,6 @@ function requireAdmin(req: Request, res: Response, next: any) {
     next();
   });
 }
-
-// Ensure database file loads on express start
-console.log('[DEBUG] Bootstrapping Nammashop transactional engine...');
 
 // ----------------------------------------------------
 // AUTHENTICATION APIS
@@ -529,7 +635,6 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Select a valid payment method before checkout.' });
     }
 
-    console.log('[CHECKOUT ADDRESS INPUT]', address);
     const resolvedPostalCode = address.pincode ?? address.postalCode ?? address.postal_code ?? address.zip;
     const resolvedStreet = address.street ?? address.house ?? address.addressLine1;
     const resolvedCountry = address.country ?? address.Country ?? address.countryName ?? address.country_code;
@@ -546,7 +651,6 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       phone: String(address.phone || '').trim(),
       country: String(resolvedCountry || '').trim()
     };
-    console.log('[CHECKOUT ADDRESS NORMALIZED]', normalizedAddress);
     const missingAddressFields = [
       ['full name', normalizedAddress.fullName],
       ['phone number', normalizedAddress.phone],
@@ -729,6 +833,24 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       }
     }
 
+    if (paymentMethod === 'Razorpay') {
+      newOrder.paymentStatus = 'Pending';
+      try {
+        const razorpayOrder = await createRazorpayGatewayOrder(newOrder);
+        PENDING_RAZORPAY_ORDERS[razorpayOrder.id] = newOrder;
+        return res.json({
+          success: true,
+          order: newOrder,
+          razorpayOrder,
+          razorpayKeyId: getRazorpayCredentials()?.keyId
+        });
+      } catch (razorpayError: any) {
+        return res.status(400).json({
+          error: razorpayError.message || 'Razorpay payment initialization failed.'
+        });
+      }
+    }
+
     // Safe transaction: checking levels and reducing stock atomically
     const committedOrder = dbService.createOrder(newOrder);
     const responseOrder = committedOrder.paymentStatus === 'Paid'
@@ -834,6 +956,38 @@ app.post('/api/orders/confirm-stripe', authenticate, async (req: Request, res: R
   } catch (err: any) {
     console.error('[STRIPE CONFIRM FAILURE]:', err);
     return res.status(400).json({ error: err.message || 'Validation checkout registration failed.' });
+  }
+});
+
+app.post('/api/orders/confirm-razorpay', authenticate, async (req: Request, res: Response) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ error: 'Razorpay payment verification details are required.' });
+    }
+
+    const pendingOrder = PENDING_RAZORPAY_ORDERS[razorpay_order_id];
+    if (!pendingOrder) {
+      return res.status(404).json({ error: 'Razorpay transaction expired or was already processed.' });
+    }
+
+    if (!verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
+      pendingOrder.paymentStatus = 'Failed';
+      return res.status(400).json({ error: 'Razorpay payment signature verification failed.' });
+    }
+
+    pendingOrder.paymentStatus = 'Paid';
+    pendingOrder.status = 'Pending';
+    const committedOrder = dbService.createOrder(pendingOrder);
+    const invoicedOrder = await generateAndAttachInvoice(committedOrder, `${req.protocol}://${req.get('host')}`);
+    delete PENDING_RAZORPAY_ORDERS[razorpay_order_id];
+
+    return res.json({
+      success: true,
+      order: invoicedOrder
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Razorpay payment verification failed.' });
   }
 });
 
@@ -1224,9 +1378,6 @@ app.put('/api/admin/orders/:id/status', requireAdmin, (req: Request, res: Respon
   const updatedOrder = dbService.updateOrderStatus(req.params.id, status, description);
   if (!updatedOrder) return res.status(404).json({ error: 'Order not found in state tracker.' });
 
-  // Simulate real-time push notification alert logs
-  console.log(`[SIMULATED DISPATCHER TIMELINE NOTIFICATION] For Order: ${updatedOrder.id} -> Status changed to: ${status}`);
-
   res.json({ success: true, order: updatedOrder });
 });
 
@@ -1369,11 +1520,7 @@ async function startServer() {
   await configureServer();
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`========================================`);
-    console.log(`  NAMMASHOP PLATFORM SECURE SERVER ONLINE`);
-    console.log(`  Local Ingress Gateway Mode: Port 3000`);
-    console.log(`  Production Ready Container Port active.`);
-    console.log(`========================================`);
+    console.info(`Nammashop server running on http://localhost:${PORT}`);
   });
 }
 

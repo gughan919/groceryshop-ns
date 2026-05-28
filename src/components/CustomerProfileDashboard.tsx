@@ -182,11 +182,11 @@ export default function CustomerProfileDashboard({
 
   // Payment System State
   const [savedPayments, setSavedPayments] = useState<any[]>([
-    { id: 'pm-1', type: 'UPI', value: 'mjjayan2007@okaxis', label: 'Primary UPI', isDefault: true },
+    { id: 'pm-1', type: 'CARD', value: '4242 4242 4242 4242', label: 'Primary card', isDefault: true, cardBrand: 'Visa' },
     { id: 'pm-2', type: 'CARD', value: '4321 •••• •••• 9876', label: 'HDFC Bank Credit Card', expiry: '12/29', brand: 'Visa', isDefault: false }
   ]);
   const [newPaymentForm, setNewPaymentForm] = useState({
-    type: 'UPI',
+    type: 'CARD',
     value: '',
     label: '',
     cardExpiry: '',
@@ -659,7 +659,7 @@ export default function CustomerProfileDashboard({
     };
 
     setSavedPayments(prev => [...prev, newPm]);
-    setNewPaymentForm({ type: 'UPI', value: '', label: '', cardExpiry: '', cardBrand: 'Visa' });
+    setNewPaymentForm({ type: 'CARD', value: '', label: '', cardExpiry: '', cardBrand: 'Visa' });
     setIsAddingPayment(false);
     notifyUser('Dynamic payment gateway credential successfully attached!', 'success');
   };
@@ -917,7 +917,7 @@ export default function CustomerProfileDashboard({
             { id: 'tracking', label: 'Delivery Delivery', icon: Truck, desc: 'Active package map timelines' },
             { id: 'addresses', label: 'Addresses Base', icon: MapPin, desc: 'Manage coordinates' },
             { id: 'wishlist', label: 'Wishlist Book', icon: Heart, desc: 'Bookmarks shelf alerts' },
-            { id: 'payments', label: 'Saved Payments', icon: CreditCard, desc: 'Cards & UPI gateways' },
+            { id: 'payments', label: 'Saved Payments', icon: CreditCard, desc: 'Cards and hosted gateways' },
             { id: 'notifications', label: 'Notifications', icon: Bell, desc: 'News alerts & preference panel' },
             { id: 'security', label: 'Account Security', icon: Lock, desc: 'Change password & logs' },
             { id: 'help', label: 'Help & Support', icon: HelpCircle, desc: 'Instant chat FAQ' }
@@ -1760,7 +1760,7 @@ export default function CustomerProfileDashboard({
             </div>
           )}
 
-          {/* TAB 6: SAVED PAYMENTS (UPIs, Card brands, Wallet tool) */}
+          {/* TAB 6: SAVED PAYMENTS */}
           {activeTab === 'payments' && (
             <div className="bg-white border border-slate-100 rounded-3xl p-6 sm:p-8 shadow-3xs space-y-6 animate-in slide-in-from-right-4 duration-200">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1791,7 +1791,6 @@ export default function CustomerProfileDashboard({
                         onChange={(e) => setNewPaymentForm(prev => ({ ...prev, type: e.target.value }))}
                         className="w-full bg-white border border-slate-150 rounded-xl px-2.5 py-2 focus:outline-none"
                       >
-                        <option value="UPI">UPI ID</option>
                         <option value="CARD">Credit/Debit Card</option>
                       </select>
                     </div>
@@ -1801,7 +1800,7 @@ export default function CustomerProfileDashboard({
                       <input
                         type="text"
                         required
-                        placeholder="e.g. ICICI Bank UPI, My Visa Card"
+                        placeholder="e.g. My Visa Card"
                         value={newPaymentForm.label}
                         onChange={(e) => setNewPaymentForm(prev => ({ ...prev, label: e.target.value }))}
                         className="w-full bg-white border border-slate-150 rounded-xl px-2.5 py-2 focus:outline-none"
@@ -1810,12 +1809,12 @@ export default function CustomerProfileDashboard({
 
                     <div className="col-span-2">
                       <label className="block text-slate-400 font-extrabold uppercase tracking-wider mb-1">
-                        {newPaymentForm.type === 'UPI' ? 'UPI Address' : 'Card number Details'}
+                        Card number Details
                       </label>
                       <input
                         type="text"
                         required
-                        placeholder={newPaymentForm.type === 'UPI' ? 'name@okhdfc' : '4321 0000 0000 9876'}
+                        placeholder="4321 0000 0000 9876"
                         value={newPaymentForm.value}
                         onChange={(e) => setNewPaymentForm(prev => ({ ...prev, value: e.target.value }))}
                         className="w-full bg-white border border-slate-150 rounded-xl px-2.5 py-2 focus:outline-none font-mono"

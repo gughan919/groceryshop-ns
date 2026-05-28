@@ -2128,7 +2128,7 @@
       "description": "Royal Grain basmati rice premium prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 12.44,
       "discount": 10,
-      "stock": 72,
+      "stock": 71,
       "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-staples",
       "brand": "Royal Grain",
@@ -3968,7 +3968,7 @@
       "description": "TeaTime chocolate digestive biscuits prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 1.88,
       "discount": 10,
-      "stock": 128,
+      "stock": 127,
       "image": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-snacks-munchies",
       "brand": "TeaTime",
@@ -4880,7 +4880,7 @@
       "description": "Dairy Pure greek yogurt natural prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 2.69,
       "discount": 15,
-      "stock": 149,
+      "stock": 148,
       "image": "https://images.unsplash.com/photo-1571212515416-fca0fbae8f8b?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-dairy-eggs",
       "brand": "Dairy Pure",
@@ -5776,7 +5776,7 @@
       "description": "Orchard Fresh royal gala apples prepared for fast grocery delivery with clear pricing, live stock, and reliable quality.",
       "price": 3.09,
       "discount": 15,
-      "stock": 157,
+      "stock": 155,
       "image": "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?q=80&w=600&auto=format&fit=crop",
       "categoryId": "cat-fruits-veg",
       "brand": "Orchard Fresh",
@@ -9707,6 +9707,256 @@
     }
   ],
   "orders": [
+    {
+      "id": "ORD-44122",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-okch1f8",
+          "productId": "prod-dynamic-cat-staples-115",
+          "productName": "Basmati Rice Premium Value 24",
+          "productImage": "https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=600&auto=format&fit=crop",
+          "price": 11.2,
+          "quantity": 1,
+          "unit": "5 kg"
+        }
+      ],
+      "subtotal": 11.2,
+      "discount": 0,
+      "tax": 0.56,
+      "deliveryFee": 2.99,
+      "total": 14.75,
+      "status": "Pending",
+      "paymentMethod": "Stripe",
+      "paymentStatus": "Paid",
+      "address": {
+        "id": "addr-cfk0p62",
+        "label": "Home",
+        "fullName": "gughan",
+        "house": "bb igigyv uyvugug",
+        "street": "bb igigyv uyvugug",
+        "city": "bhbuyvuvutvttycycyccc",
+        "state": "cycyrccyfhcfchfchc",
+        "pincode": "560034",
+        "postalCode": "560034",
+        "phone": "9876543210",
+        "country": "vgvvhhchfchch"
+      },
+      "createdAt": "2026-05-27T13:08:28.519Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T13:08:28.519Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        },
+        {
+          "status": "Pending",
+          "time": "2026-05-27T13:09:07.626Z",
+          "description": "Payment status updated to: Paid."
+        }
+      ],
+      "invoiceUrl": "/generated-invoices/INV-ORD-44122.pdf",
+      "invoiceId": "INV-ORD-44122",
+      "invoiceGeneratedAt": "2026-05-27T13:09:08.343Z",
+      "invoiceEmailStatus": "skipped",
+      "invoiceEmailError": "SMTP settings are not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and INVOICE_FROM_EMAIL to send real invoice emails."
+    },
+    {
+      "id": "ORD-39658",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-5ukud5o",
+          "productId": "prod-dynamic-cat-dairy-eggs-287",
+          "productName": "Greek Yogurt Natural Value 58",
+          "productImage": "https://images.unsplash.com/photo-1571212515416-fca0fbae8f8b?q=80&w=600&auto=format&fit=crop",
+          "price": 2.29,
+          "quantity": 1,
+          "unit": "500 g"
+        }
+      ],
+      "subtotal": 2.29,
+      "discount": 0,
+      "tax": 0.11,
+      "deliveryFee": 2.99,
+      "total": 5.39,
+      "status": "Pending",
+      "paymentMethod": "Razorpay",
+      "paymentStatus": "Paid",
+      "address": {
+        "id": "addr-cfk0p62",
+        "label": "Home",
+        "fullName": "gughan",
+        "house": "bb igigyv uyvugug",
+        "street": "bb igigyv uyvugug",
+        "city": "bhbuyvuvutvttycycyccc",
+        "state": "cycyrccyfhcfchfchc",
+        "pincode": "560034",
+        "postalCode": "560034",
+        "phone": "9876543210",
+        "country": "vgvvhhchfchch"
+      },
+      "createdAt": "2026-05-27T11:24:31.030Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T11:24:31.030Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ],
+      "invoiceUrl": "/generated-invoices/INV-ORD-39658.pdf",
+      "invoiceId": "INV-ORD-39658",
+      "invoiceGeneratedAt": "2026-05-27T11:24:32.263Z",
+      "invoiceEmailStatus": "skipped",
+      "invoiceEmailError": "SMTP settings are not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and INVOICE_FROM_EMAIL to send real invoice emails."
+    },
+    {
+      "id": "ORD-66120",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-nyxl746",
+          "productId": "prod-dynamic-cat-snacks-munchies-230",
+          "productName": "Chocolate Digestive Biscuits Value 47",
+          "productImage": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?q=80&w=600&auto=format&fit=crop",
+          "price": 1.69,
+          "quantity": 1,
+          "unit": "300 g"
+        }
+      ],
+      "subtotal": 1.69,
+      "discount": 0,
+      "tax": 0.08,
+      "deliveryFee": 2.99,
+      "total": 4.76,
+      "status": "Pending",
+      "paymentMethod": "Razorpay",
+      "paymentStatus": "Paid",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T11:10:21.014Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T11:10:21.014Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ],
+      "invoiceUrl": "/generated-invoices/INV-ORD-66120.pdf",
+      "invoiceId": "INV-ORD-66120",
+      "invoiceGeneratedAt": "2026-05-27T11:10:22.692Z",
+      "invoiceEmailStatus": "skipped",
+      "invoiceEmailError": "SMTP settings are not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and INVOICE_FROM_EMAIL to send real invoice emails."
+    },
+    {
+      "id": "ORD-37974",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-zc7hpsy",
+          "productId": "prod-dynamic-cat-fruits-veg-343",
+          "productName": "Royal Gala Apples Value 58",
+          "productImage": "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?q=80&w=600&auto=format&fit=crop",
+          "price": 2.63,
+          "quantity": 1,
+          "unit": "6 pcs"
+        }
+      ],
+      "subtotal": 2.63,
+      "discount": 0,
+      "tax": 0.13,
+      "deliveryFee": 2.99,
+      "total": 5.75,
+      "status": "Pending",
+      "paymentMethod": "COD",
+      "paymentStatus": "Pending",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T10:23:33.755Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T10:23:33.755Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ]
+    },
+    {
+      "id": "ORD-67304",
+      "userId": "user-google-5lc3b5ff",
+      "userEmail": "gughan4912@gmail.com",
+      "userName": "gug han",
+      "items": [
+        {
+          "id": "item-4r6pbgq",
+          "productId": "prod-dynamic-cat-fruits-veg-343",
+          "productName": "Royal Gala Apples Value 58",
+          "productImage": "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?q=80&w=600&auto=format&fit=crop",
+          "price": 2.63,
+          "quantity": 1,
+          "unit": "6 pcs"
+        }
+      ],
+      "subtotal": 2.63,
+      "discount": 0,
+      "tax": 0.13,
+      "deliveryFee": 2.99,
+      "total": 5.75,
+      "status": "Pending",
+      "paymentMethod": "Stripe",
+      "paymentStatus": "Pending",
+      "address": {
+        "id": "addr-lkm89do",
+        "label": "Home",
+        "fullName": "wuiif",
+        "house": "gkndbuohgbodher",
+        "street": "gkndbuohgbodher",
+        "city": "jhboehbjbehr",
+        "state": "rgbhgoerger",
+        "pincode": "56004",
+        "postalCode": "56004",
+        "phone": "9876543210",
+        "country": "egr;oengner'oghe"
+      },
+      "createdAt": "2026-05-27T10:23:07.851Z",
+      "timeline": [
+        {
+          "status": "Pending",
+          "time": "2026-05-27T10:23:07.851Z",
+          "description": "Groceries order authorized. Nammashop team preparing dispatch."
+        }
+      ]
+    },
     {
       "id": "ORD-74215",
       "userId": "user-google-5lc3b5ff",

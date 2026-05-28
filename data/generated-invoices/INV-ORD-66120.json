@@ -1,0 +1,49 @@
+{
+  "id": "ORD-66120",
+  "userId": "user-google-5lc3b5ff",
+  "userEmail": "gughan4912@gmail.com",
+  "userName": "gug han",
+  "items": [
+    {
+      "id": "item-nyxl746",
+      "productId": "prod-dynamic-cat-snacks-munchies-230",
+      "productName": "Chocolate Digestive Biscuits Value 47",
+      "productImage": "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?q=80&w=600&auto=format&fit=crop",
+      "price": 1.69,
+      "quantity": 1,
+      "unit": "300 g"
+    }
+  ],
+  "subtotal": 1.69,
+  "discount": 0,
+  "tax": 0.08,
+  "deliveryFee": 2.99,
+  "total": 4.76,
+  "status": "Pending",
+  "paymentMethod": "Razorpay",
+  "paymentStatus": "Paid",
+  "address": {
+    "id": "addr-lkm89do",
+    "label": "Home",
+    "fullName": "wuiif",
+    "house": "gkndbuohgbodher",
+    "street": "gkndbuohgbodher",
+    "city": "jhboehbjbehr",
+    "state": "rgbhgoerger",
+    "pincode": "56004",
+    "postalCode": "56004",
+    "phone": "9876543210",
+    "country": "egr;oengner'oghe"
+  },
+  "createdAt": "2026-05-27T11:10:21.014Z",
+  "timeline": [
+    {
+      "status": "Pending",
+      "time": "2026-05-27T11:10:21.014Z",
+      "description": "Groceries order authorized. Nammashop team preparing dispatch."
+    }
+  ],
+  "invoiceId": "INV-ORD-66120",
+  "deliveryEstimate": "Express delivery window",
+  "storeLogoUrl": ""
+}

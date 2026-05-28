@@ -64,11 +64,11 @@ import {
   browserLocalPersistence
 } from 'firebase/auth';
 import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
-import { generateAndUploadInvoice } from './utils/invoice';
 
 declare global {
   interface Window {
     recaptchaVerifier: any;
+    Razorpay?: new (options: any) => { open: () => void; on: (event: string, callback: (response: any) => void) => void };
   }
 }
 
@@ -87,11 +87,28 @@ function sameCollectionByJson<T extends { id: string }>(left: T[], right: T[]) {
   return true;
 }
 
-const traceRender = (...args: unknown[]) => {
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(...args);
-  }
-};
+const traceRender = (..._args: unknown[]) => {};
+
+function loadRazorpayCheckout() {
+  return new Promise<void>((resolve, reject) => {
+    if (window.Razorpay) {
+      resolve();
+      return;
+    }
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(), { once: true });
+      existingScript.addEventListener('error', () => reject(new Error('Razorpay checkout script failed to load.')), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Razorpay checkout script failed to load.'));
+    document.body.appendChild(script);
+  });
+}
 
 const DISCOUNT_FILTERS: Array<{ id: DiscountFilterId; label: string; description: string }> = [
   { id: '10', label: '10% Off', description: 'Products with exactly 10% savings' },
@@ -377,11 +394,6 @@ export default function App() {
 
     const ordersRef = collection(firestoreDb, 'orders');
     const unsub = onSnapshot(query(ordersRef, orderBy('createdAt', 'desc')), (snapshot) => {
-      console.debug('Firestore admin orders snapshot', {
-        size: snapshot.size,
-        changes: snapshot.docChanges().length,
-        bootstrapped: adminOrdersBootstrappedRef.current
-      });
       if (!adminOrdersBootstrappedRef.current) {
         adminKnownOrderIdsRef.current = new Set(snapshot.docs.map((doc) => doc.id));
         adminOrdersBootstrappedRef.current = true;
@@ -554,13 +566,13 @@ export default function App() {
   const indianBrands = [
     { name: 'Aashirvaad', tone: 'bg-orange-50 text-orange-700 border-orange-100' },
     { name: 'MDH', tone: 'bg-red-50 text-red-700 border-red-100' },
-    { name: 'MTR', tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+    { name: 'MTR', tone: 'bg-red-50 text-red-700 border-red-100' },
     { name: 'Amul', tone: 'bg-blue-50 text-blue-700 border-blue-100' },
     { name: 'Parle', tone: 'bg-yellow-50 text-yellow-700 border-yellow-100' },
     { name: 'Haldiram', tone: 'bg-rose-50 text-rose-700 border-rose-100' },
     { name: 'Britannia', tone: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
     { name: 'Tata', tone: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
-    { name: 'Priya', tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    { name: 'Priya', tone: 'bg-red-50 text-[#ff2d2d] border-red-100' },
     { name: 'Annapoorna', tone: 'bg-lime-50 text-lime-700 border-lime-100' }
   ];
 
@@ -760,7 +772,6 @@ export default function App() {
     const shouldUpdateToken = latestTokenRef.current !== sessionToken;
     const shouldUpdateUser = latestUserRef.current?.id !== user.id || latestUserRef.current?.role !== user.role || latestUserRef.current?.email !== user.email;
 
-    console.debug('[AUTH SESSION COMMIT]', { source, userId: user.id, role: user.role, shouldUpdateToken, shouldUpdateUser });
     localStorage.setItem('nammashop_token', sessionToken);
     latestTokenRef.current = sessionToken;
     latestUserRef.current = user;
@@ -808,10 +819,7 @@ export default function App() {
       traceRender('Auth changed', { hasFirebaseUser: !!firebaseUser, uid: firebaseUser?.uid, email: firebaseUser?.email });
       if (firebaseUser) {
         const syncKey = `${firebaseUser.uid}:${firebaseUser.email || ''}`;
-        if (firebaseSyncInFlightRef.current === syncKey) {
-          console.debug('[AUTH STATE SKIP] Firebase sync already in flight', syncKey);
-          return;
-        }
+        if (firebaseSyncInFlightRef.current === syncKey) return;
         firebaseSyncInFlightRef.current = syncKey;
         setAuthResolving(true);
         try {
@@ -1536,7 +1544,6 @@ export default function App() {
       const result = await signInWithPopup(firebaseAuth, provider);
       const firebaseUser = result.user;
       if (firebaseUser) {
-        console.debug('[AUTH LOGIN] Google sign-in succeeded; onAuthStateChanged will commit the backend session once.');
         setAuthMode(null);
         return;
       }
@@ -1905,13 +1912,11 @@ export default function App() {
       return;
     }
     if (missingCartProductIds.length > 0 || cartDetails.length !== normalizedCart.length) {
-      console.error('Checkout blocked: cart product data missing', { missingCartProductIds, normalizedCart });
       notifyUser('Some cart products are still loading. Please wait a moment and try again.', 'error');
       fetchProductsFallback();
       return;
     }
     if (!Number.isFinite(cartGrandTotal) || cartGrandTotal <= 0) {
-      console.error('Checkout blocked: invalid order total', { cartSubtotal, activeCouponDiscount, finalDeliveryFee, computedTax, cartGrandTotal });
       notifyUser('Checkout total is invalid. Refreshing product prices now.', 'error');
       fetchProductsFallback();
       return;
@@ -1927,7 +1932,6 @@ export default function App() {
 
     const payloadTargetAddress = addresses.find(a => a.id === selectedAddressId);
     const normalizedCheckoutAddress = payloadTargetAddress ? normalizeAddressRecord(payloadTargetAddress) : null;
-    console.log('Checkout address object before order creation:', normalizedCheckoutAddress);
     if (!normalizedCheckoutAddress) {
       notifyUser('Selected delivery address is unavailable. Please choose or save it again.', 'error');
       return;
@@ -1937,7 +1941,6 @@ export default function App() {
     const countryMissing = !normalizedCheckoutAddress.country?.trim();
     if (countryMissing) missingAddressFields.push('country' as keyof Address);
     if (missingAddressFields.length > 0) {
-      console.error('Checkout blocked: incomplete delivery address', normalizedCheckoutAddress);
       notifyUser(countryMissing ? 'Please select country.' : `Please complete delivery address: ${missingAddressFields.join(', ')}.`, 'error');
       return;
     }
@@ -2004,6 +2007,20 @@ export default function App() {
       }
     }
 
+    const completeSuccessfulCheckout = (order: Order, message = 'Order placed successfully.') => {
+      if (paymentWindow) {
+        paymentWindow.close();
+      }
+      notifyUser(message, 'success');
+      setCart([]);
+      setActiveAppliedCoupon(null);
+      setCouponCodeInput('');
+      fetchCustomerData(token);
+      fetchCatalogs();
+      setActiveTrackingOrder(order);
+      setViewMode('success');
+    };
+
     setIsPendingCheckout(true);
     try {
       const resp = await fetch('/api/orders', {
@@ -2031,6 +2048,65 @@ export default function App() {
 
       const data = await resp.json();
       if (resp.ok) {
+        if (data.razorpayOrder) {
+          if (paymentWindow) {
+            paymentWindow.close();
+          }
+          const key = data.razorpayKeyId || (import.meta as any).env?.VITE_RAZORPAY_KEY_ID;
+          if (!key) {
+            notifyUser('Razorpay key is not configured. Please set VITE_RAZORPAY_KEY_ID.', 'error');
+            return;
+          }
+          await loadRazorpayCheckout();
+          await new Promise<void>((resolve, reject) => {
+            const razorpay = new window.Razorpay!({
+              key,
+              amount: data.razorpayOrder.amount,
+              currency: data.razorpayOrder.currency,
+              name: 'NammaShop',
+              description: `Order ${data.order.id}`,
+              order_id: data.razorpayOrder.id,
+              prefill: {
+                name: currentUser?.name || normalizedCheckoutAddress.fullName,
+                email: currentUser?.email || '',
+                contact: normalizedCheckoutAddress.phone
+              },
+              theme: {
+                color: '#ff2d2d'
+              },
+              handler: async (response: any) => {
+                try {
+                  const verifyResp = await fetch('/api/orders/confirm-razorpay', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(response)
+                  });
+                  const verifyData = await verifyResp.json();
+                  if (!verifyResp.ok) {
+                    reject(new Error(verifyData.error || 'Razorpay payment verification failed.'));
+                    return;
+                  }
+                  completeSuccessfulCheckout(verifyData.order, 'Razorpay payment verified. Order placed successfully.');
+                  resolve();
+                } catch (verifyError) {
+                  reject(verifyError);
+                }
+              },
+              modal: {
+                ondismiss: () => reject(new Error('Razorpay payment was cancelled.'))
+              }
+            });
+            razorpay.on('payment.failed', (response: any) => {
+              reject(new Error(response?.error?.description || 'Razorpay payment failed.'));
+            });
+            razorpay.open();
+          });
+          return;
+        }
+
         if (data.stripeSessionUrl) {
           setStripeSessionUrl(data.stripeSessionUrl);
           setStripeRedirecting(true);
@@ -2072,11 +2148,6 @@ export default function App() {
         setCouponCodeInput('');
         fetchCustomerData(token);
         fetchCatalogs(); // Refresh stock reductions instantly
-        
-        generateAndUploadInvoice(data.order, token).then(() => {
-          fetchCustomerData(token);
-        });
-
         setActiveTrackingOrder(data.order);
         setViewMode('success');
       } else {
@@ -2089,8 +2160,7 @@ export default function App() {
       if (paymentWindow) {
         paymentWindow.close();
       }
-      console.error('Checkout request failed:', error);
-      notifyUser('Api checkout payment gateway timeout.', 'error');
+      notifyUser(error instanceof Error ? error.message : 'Payment gateway request failed.', 'error');
     } finally {
       setIsPendingCheckout(false);
     }
@@ -2237,6 +2307,7 @@ export default function App() {
       )}
 
       {/* DEMO ADMINISTRATIVE SHORTCUT INDICATOR BAR */}
+      {false && (
       <div className="bg-[linear-gradient(90deg,#111827,#2b2b2b)] text-slate-100 px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-xs z-35 border-b border-slate-800">
         <div className="flex items-center gap-1.5 font-mono">
           <span className="h-2 w-2 rounded-full bg-[#ff2d2d] animate-pulse"></span>
@@ -2256,6 +2327,7 @@ export default function App() {
           )}
         </div>
       </div>
+      )}
 
       {/* STICKY HEADER VIEW NAVIGATION */}
       <header className="sticky top-0 z-40 bg-[rgba(255,255,255,0.94)] dark:bg-slate-900/95 backdrop-blur-xl border-b border-slate-200/70 shadow-[0_18px_60px_-32px_rgba(15,23,42,0.18)] py-3.5 px-4 sm:px-6">
@@ -2289,7 +2361,7 @@ export default function App() {
                     saveRecentSearchAndSubmit(searchTerm);
                   }
                 }}
-                className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:border-slate-700 focus:border-emerald-500 rounded-2xl pl-10 pr-4 py-2 text-xs focus:outline-none transition-all placeholder:text-gray-400 font-medium"
+                className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:border-slate-700 focus:border-[#ff2d2d] rounded-2xl pl-10 pr-4 py-2 text-xs focus:outline-none transition-all placeholder:text-gray-400 font-medium"
               />
               <Search className="absolute left-3.5 top-2.5 text-slate-400" size={15} />
               {searchTerm && (
@@ -2415,7 +2487,7 @@ export default function App() {
             {/* AI Assistant shortcut */}
             <button
               onClick={() => setViewMode('ai')}
-              className={`items-center gap-1.5 px-3 py-2 rounded-xl transition-all cursor-pointer ${viewMode === 'catalog' ? 'hidden' : 'flex'} ${viewMode === 'ai' ? 'text-[#ff2d2d] bg-red-50 font-bold font-sans' : 'text-slate-600 hover:bg-slate-50'}`}
+              className={`items-center gap-1.5 px-3 py-2 rounded-xl transition-all cursor-pointer ${viewMode === 'catalog' || viewMode === 'checkout' || viewMode === 'success' ? 'hidden' : 'flex'} ${viewMode === 'ai' ? 'text-[#ff2d2d] bg-red-50 font-bold font-sans' : 'text-slate-600 hover:bg-slate-50'}`}
             >
               <Sparkles size={14} className="text-[#ff2d2d]" />
               <span>AI Kitchen</span>
@@ -2529,7 +2601,7 @@ export default function App() {
             {authInitialized && (
               <button
                 onClick={() => setAuthMode('login')}
-                className="mt-4 bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold"
+                className="mt-4 bg-[#ff2d2d] text-white px-4 py-2 rounded-xl text-sm font-bold"
               >
                 Admin Login
               </button>
@@ -2543,7 +2615,7 @@ export default function App() {
             {/* Back to home navigation */}
             <button
               onClick={() => setViewMode('catalog')}
-              className="flex items-center gap-1 text-xs text-emerald-700 font-bold hover:underline cursor-pointer"
+              className="flex items-center gap-1 text-xs text-[#ff2d2d] font-bold hover:underline cursor-pointer"
             >
               <ChevronLeft size={16} />
               <span>Back to Home</span>
@@ -2558,14 +2630,14 @@ export default function App() {
                 <div className="bg-white border border-gray-100 rounded-3xl p-5 sm:p-6 shadow-3xs space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-gray-900 font-extrabold text-base tracking-tight flex items-center gap-1.5">
-                      <MapPin size={18} className="text-emerald-600" />
+                      <MapPin size={18} className="text-[#ff2d2d]" />
                       <span>Select Delivery coordinates Address</span>
                     </h3>
                     
                     {!isAddingNewAddress && (
                       <button
                         onClick={() => setIsAddingNewAddress(true)}
-                        className="text-emerald-700 hover:text-emerald-800 text-xs font-bold flex items-center gap-1 tracking-wide"
+                        className="text-[#ff2d2d] hover:text-red-700 text-xs font-bold flex items-center gap-1 tracking-wide"
                       >
                         <Plus size={14} />
                         <span>Pinned Location</span>
@@ -2694,7 +2766,7 @@ export default function App() {
                         <button
                           type="submit"
                           disabled={isSavingAddress}
-                          className={`px-3 py-1.5 ${isSavingAddress ? 'bg-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-750'} text-white font-semibold rounded-lg shadow-xs transition-all`}
+                          className={`px-3 py-1.5 ${isSavingAddress ? 'bg-slate-400 cursor-not-allowed' : 'bg-[#ff2d2d] hover:bg-[#e12626]'} text-white font-semibold rounded-lg shadow-xs transition-all`}
                         >
                           {isSavingAddress ? 'Saving...' : 'Save Coordinates'}
                         </button>
@@ -2711,7 +2783,7 @@ export default function App() {
                             onClick={() => setSelectedAddressId(a.id)}
                             className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
                               selectedAddressId === a.id
-                                ? 'border-emerald-600 bg-emerald-50/20 shadow-xs ring-1 ring-emerald-600'
+                                ? 'border-[#ff2d2d] bg-red-50/40 shadow-xs ring-1 ring-[#ff2d2d]'
                                 : 'border-slate-100 bg-white hover:bg-slate-50'
                             }`}
                           >
@@ -2733,7 +2805,7 @@ export default function App() {
                 {/* Gateway Payment selection */}
                 <div className="bg-white border border-gray-100 rounded-3xl p-5 sm:p-6 shadow-3xs space-y-4">
                   <h3 className="text-gray-900 font-extrabold text-base tracking-tight flex items-center gap-1.5">
-                    <Calendar size={18} className="text-emerald-600" />
+                    <Calendar size={18} className="text-[#ff2d2d]" />
                     <span>Select delivery slot</span>
                   </h3>
 
@@ -2749,13 +2821,13 @@ export default function App() {
                         onClick={() => setDeliverySlot(slot.id as typeof deliverySlot)}
                         className={`rounded-2xl border p-4 text-left transition-all ${
                           deliverySlot === slot.id
-                            ? 'border-emerald-600 bg-emerald-50/30 ring-1 ring-emerald-600'
+                            ? 'border-[#ff2d2d] bg-red-50/40 ring-1 ring-[#ff2d2d]'
                             : 'border-slate-100 bg-white hover:bg-slate-50'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <span className="font-bold text-sm text-gray-900">{slot.title}</span>
-                          <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-emerald-700 border border-emerald-100">{slot.fee}</span>
+                          <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-[#ff2d2d] border border-red-100">{slot.fee}</span>
                         </div>
                         <p className="mt-2 text-xs font-semibold text-slate-600">{slot.eta}</p>
                         <p className="mt-1 text-[11px] leading-5 text-slate-500">{slot.desc}</p>
@@ -2767,7 +2839,7 @@ export default function App() {
                 {/* Gateway Payment selection */}
                 <div className="bg-white border border-gray-100 rounded-3xl p-5 sm:p-6 shadow-3xs space-y-4">
                   <h3 className="text-gray-900 font-extrabold text-base tracking-tight flex items-center gap-1.5">
-                    <Truck size={18} className="text-emerald-600" />
+                    <Truck size={18} className="text-[#ff2d2d]" />
                     <span>Select Payment Gateway Mode</span>
                   </h3>
 
@@ -2776,7 +2848,7 @@ export default function App() {
                       onClick={() => setPaymentMethod('COD')}
                       className={`p-4 rounded-2xl border transition-all cursor-pointer ${
                         paymentMethod === 'COD'
-                          ? 'border-emerald-600 bg-emerald-50/20 ring-1 ring-emerald-600'
+                          ? 'border-[#ff2d2d] bg-red-50/40 ring-1 ring-[#ff2d2d]'
                           : 'border-slate-100 bg-white hover:bg-slate-50'
                       }`}
                     >
@@ -2788,19 +2860,19 @@ export default function App() {
                       onClick={() => setPaymentMethod('Razorpay')}
                       className={`p-4 rounded-2xl border transition-all cursor-pointer opacity-90 ${
                         paymentMethod === 'Razorpay'
-                          ? 'border-emerald-600 bg-emerald-50/20 ring-1 ring-emerald-600'
+                          ? 'border-[#ff2d2d] bg-red-50/40 ring-1 ring-[#ff2d2d]'
                           : 'border-slate-100 bg-white hover:bg-slate-50'
                       }`}
                     >
-                      <span className="font-bold text-xs text-gray-800 block">UPI / Razorpay Gateway</span>
-                      <p className="text-[10px] text-gray-400 mt-1">Prepay via direct secure Netbanking, UPI, GPay, or Net Banking API.</p>
+                      <span className="font-bold text-xs text-gray-800 block">Razorpay Secure Checkout</span>
+                      <p className="text-[10px] text-gray-400 mt-1">Prepay through Razorpay's hosted checkout with server-side payment verification.</p>
                     </div>
 
                     <div
                       onClick={() => setPaymentMethod('Stripe')}
                       className={`p-4 rounded-2xl border transition-all cursor-pointer opacity-90 ${
                         paymentMethod === 'Stripe'
-                          ? 'border-emerald-600 bg-emerald-50/20 ring-1 ring-emerald-600'
+                          ? 'border-[#ff2d2d] bg-red-50/40 ring-1 ring-[#ff2d2d]'
                           : 'border-slate-100 bg-white hover:bg-slate-50'
                       }`}
                     >
@@ -2856,11 +2928,11 @@ export default function App() {
                     </button>
                   </div>
                   {activeAppliedCoupon && (
-                    <div className="bg-emerald-50 border border-emerald-100 p-2 rounded-xl flex items-center justify-between text-[11px] text-emerald-800">
+                    <div className="bg-red-50 border border-red-100 p-2 rounded-xl flex items-center justify-between text-[11px] text-red-700">
                       <span>🎉 PROMO CODE: <strong>{activeAppliedCoupon.code}</strong> matched!</span>
                       <button
                         onClick={() => { setActiveAppliedCoupon(null); setCouponCodeInput(''); }}
-                        className="font-bold text-[10px] text-emerald-600 hover:underline"
+                        className="font-bold text-[10px] text-[#ff2d2d] hover:underline"
                       >
                         Remove
                       </button>
@@ -2875,7 +2947,7 @@ export default function App() {
                     <span className="font-mono font-semibold">£{cartSubtotal.toFixed(2)}</span>
                   </div>
                   {activeCouponDiscount > 0 && (
-                    <div className="flex justify-between text-emerald-600">
+                    <div className="flex justify-between text-[#ff2d2d]">
                       <span>Promo Coupon Discount</span>
                       <span className="font-mono font-semibold">-£{activeCouponDiscount.toFixed(2)}</span>
                     </div>
@@ -2887,20 +2959,20 @@ export default function App() {
                   <div className="flex justify-between text-slate-500">
                     <span>Delivery fee ({deliverySlot})</span>
                     <span className="font-mono font-semibold">
-                      {finalDeliveryFee === 0 ? <strong className="text-emerald-600 uppercase">FREE</strong> : `£${finalDeliveryFee.toFixed(2)}`}
+                      {finalDeliveryFee === 0 ? <strong className="text-[#ff2d2d] uppercase">FREE</strong> : `£${finalDeliveryFee.toFixed(2)}`}
                     </span>
                   </div>
                 </div>
 
                 <div className="border-t border-gray-100 pt-3 flex justify-between items-center text-slate-900 dark:text-white font-extrabold text-sm">
                   <span>Grand Total Bill</span>
-                  <span className="font-mono font-extrabold text-lg text-emerald-700">£{cartGrandTotal.toFixed(2)}</span>
+                  <span className="font-mono font-extrabold text-lg text-[#ff2d2d]">£{cartGrandTotal.toFixed(2)}</span>
                 </div>
 
                 <button
                   onClick={checkoutCartAndPay}
                   disabled={isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0}
-                  className={`w-full ${isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0 ? 'bg-slate-450 cursor-not-allowed opacity-80' : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'} py-3 rounded-2xl text-white font-bold text-xs tracking-wider transition-all mt-4 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm`}
+                  className={`w-full ${isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0 ? 'bg-slate-450 cursor-not-allowed opacity-80' : 'bg-[#ff2d2d] hover:bg-[#e12626] active:scale-95'} py-3 rounded-2xl text-white font-bold text-xs tracking-wider transition-all mt-4 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm`}
                 >
                   {isPendingCheckout ? (
                     <div className="h-3 w-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
@@ -2965,12 +3037,8 @@ export default function App() {
             onNavigateToProducts={() => {
               setViewMode('catalog');
             }}
-            onTrackLiveDispatch={() => {
+            onTrackOrder={() => {
               setProfileSubTab('tracking');
-              setViewMode('profile');
-            }}
-            onNavigateToOrders={() => {
-              setProfileSubTab('orders');
               setViewMode('profile');
             }}
           />
@@ -3136,26 +3204,8 @@ export default function App() {
                 </>
               )}
               {!activeBanner && <div className="absolute inset-0 bg-[linear-gradient(120deg,#111827,#ff2d2d)]" />}
-              {banners.length > 1 && (
-                <>
-                  <button
-                    onClick={() => setBannerIndex((prev) => (prev - 1 + banners.length) % banners.length)}
-                    className="absolute left-3 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-white/18 text-white shadow-lg backdrop-blur-md transition hover:scale-105 hover:bg-white/28 sm:left-4 sm:h-11 sm:w-11"
-                    aria-label="Previous sponsored banner"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <button
-                    onClick={() => setBannerIndex((prev) => (prev + 1) % banners.length)}
-                    className="absolute right-3 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-white/18 text-white shadow-lg backdrop-blur-md transition hover:scale-105 hover:bg-white/28 sm:right-4 sm:h-11 sm:w-11"
-                    aria-label="Next sponsored banner"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
-                </>
-              )}
               <div className="relative min-h-[300px] p-5 sm:min-h-[370px] sm:p-7 lg:p-10">
-                <div className="flex min-h-[260px] max-w-2xl flex-col justify-end space-y-4 sm:min-h-[310px]">
+                <div className="flex min-h-[260px] max-w-2xl flex-col justify-end space-y-5 pb-10 sm:min-h-[310px] sm:pb-12">
                   <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.22em] text-white/85">
                     <span className="rounded-full border border-white/25 bg-white/18 px-3 py-1 backdrop-blur">{activeBanner?.badge || 'Sponsored campaign'}</span>
                     <span className="rounded-full border border-white/20 bg-black/20 px-3 py-1 backdrop-blur">{activeBanner?.sponsorName || 'NammaShop partner'}</span>
@@ -3178,56 +3228,23 @@ export default function App() {
                     >
                       {activeBanner?.ctaLabel || 'Shop Now'}
                     </button>
-                    <button
-                      onClick={() => activeBanner ? openCampaignCategory(activeBanner) : setIsCartDrawerOpen(true)}
-                      className="rounded-2xl border border-white/30 bg-white/16 px-5 py-3 text-sm font-bold text-white backdrop-blur transition hover:bg-white/24"
-                    >
-                      {activeBanner?.secondaryCtaLabel || 'Explore Collection'}
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { label: 'Avg. delivery', value: '18 mins' },
-                      { label: 'Live offers', value: `${flashSaleProducts.length}+` },
-                      { label: 'Free delivery', value: '£20+' }
-                    ].map((stat) => (
-                      <div key={stat.label} className="rounded-2xl border border-slate-200 bg-white/90 p-3 backdrop-blur">
-                        <p className="text-lg font-extrabold">{stat.value}</p>
-                        <p className="text-[11px] text-slate-500">{stat.label}</p>
-                      </div>
-                    ))}
                   </div>
                 </div>
 
-                <div className="grid gap-3 self-end">
-                  {banners.length > 1 && (
-                    <div className="flex items-center justify-between rounded-[1.5rem] border border-white/20 bg-black/20 p-3 backdrop-blur-md">
-                      <button
-                        onClick={() => setBannerIndex((prev) => (prev - 1 + banners.length) % banners.length)}
-                        className="rounded-full bg-white/18 p-2 text-white transition hover:scale-105 hover:bg-white/28"
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-                      <div className="flex gap-2">
-                        {banners.map((banner, idx) => (
-                          <button
-                            key={banner.id}
-                            onClick={() => setBannerIndex(idx)}
-                            className={`h-2 rounded-full transition-all ${idx === bannerIndex ? 'w-8 bg-white' : 'w-2 bg-white/45'}`}
-                            aria-label={`Go to banner ${idx + 1}`}
-                          />
-                        ))}
-                      </div>
-                      <button
-                        onClick={() => setBannerIndex((prev) => (prev + 1) % banners.length)}
-                        className="rounded-full bg-white/18 p-2 text-white transition hover:scale-105 hover:bg-white/28"
-                      >
-                        <ChevronRight size={16} />
-                      </button>
+                {banners.length > 1 && (
+                  <div className="absolute inset-x-0 bottom-4 flex justify-center">
+                    <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/20 px-3 py-2 backdrop-blur-md">
+                      {banners.map((banner, idx) => (
+                        <button
+                          key={banner.id}
+                          onClick={() => setBannerIndex(idx)}
+                          className={`h-2 rounded-full transition-all ${idx === bannerIndex ? 'w-8 bg-white' : 'w-2 bg-white/45'}`}
+                          aria-label={`Go to banner ${idx + 1}`}
+                        />
+                      ))}
                     </div>
-                  )}
-                  {/* Sponsored hero intentionally kept clean and image-first */}
-                </div>
+                  </div>
+                )}
               </div>
             </section>
 
@@ -3879,7 +3896,7 @@ export default function App() {
             </button>
             {activeProductLoading && (
               <div className="absolute inset-x-0 top-0 h-1 overflow-hidden bg-slate-100">
-                <div className="h-full w-1/2 animate-pulse bg-emerald-500" />
+                <div className="h-full w-1/2 animate-pulse bg-[#ff2d2d]" />
               </div>
             )}
 
@@ -3913,7 +3930,7 @@ export default function App() {
                         {variant}
                       </span>
                     ))}
-                    <span className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-700">
+                    <span className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-[10px] font-bold text-[#ff2d2d]">
                       Delivery: 10-25 mins
                     </span>
                     {getEffectiveDiscount(activeProductOverlay) > 0 && (
@@ -4203,7 +4220,7 @@ export default function App() {
       )}
 
       {/* FLOAT STICKY BOT ASSISTANT CHATS */}
-      {viewMode !== 'admin' && viewMode !== 'catalog' && (
+      {viewMode === 'ai' && (
         <AICompanion
           products={products}
           onAddProductsToCart={addProductsFromRecipeToCart}
@@ -4297,3 +4314,4 @@ export default function App() {
     </div>
   );
 }
+
