@@ -233,7 +233,7 @@ async function generateAndAttachInvoice(order: Order, publicBaseUrl = process.en
   }) || order;
 }
 
-const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
+const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com', 'gughan4912@gmail.com']);
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyDbEt9Pv4TenLt7LD3tS0pXdAQsYo7_DJs';
 
 const DEFAULT_DRIVER: DeliveryPartner = {

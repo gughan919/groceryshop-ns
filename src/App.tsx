@@ -75,7 +75,7 @@ declare global {
   }
 }
 
-const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
+const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com', 'gughan4912@gmail.com']);
 const HOMEPAGE_PRODUCTS_LIMIT = 64;
 type DiscountFilterId = '10' | '20' | '30' | '40' | '50' | 'special' | 'flash' | 'best';
 

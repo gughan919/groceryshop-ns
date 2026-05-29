@@ -639,6 +639,9 @@ export function loadDb() {
       if (!db.users.some(u => u.email === 'nammashopuk@gmail.com')) {
         db.users.push({ id: 'user-nammashopuk-admin', email: 'nammashopuk@gmail.com', name: 'Nammashop UK Admin', role: 'admin' });
       }
+      if (!db.users.some(u => u.email === 'gughan4912@gmail.com')) {
+        db.users.push({ id: 'user-gughan-admin', email: 'gughan4912@gmail.com', name: 'Gughan Admin', role: 'admin' });
+      }
       if (!db.categories || db.categories.length === 0) db.categories = defaultCategories;
       if (!db.products || db.products.length === 0) db.products = defaultProducts;
       ensureExpandedCatalog();
@@ -657,6 +660,7 @@ export function loadDb() {
           { id: 'user-admin', email: 'admin@nammashop.com', name: 'Nammashop Partner Admin', role: 'admin' },
           { id: 'user-nammashopuk-admin', email: 'nammashopuk@gmail.com', name: 'Nammashop UK Admin', role: 'admin' },
           { id: 'user-owner', email: 'mjjayan2007@gmail.com', name: 'Nammashop Core Owner', role: 'admin' },
+          { id: 'user-gughan-admin', email: 'gughan4912@gmail.com', name: 'Gughan Admin', role: 'admin' },
           { id: 'user-customer', email: 'customer@nammashop.com', name: 'Rohan Sharma', role: 'customer', phone: '+44 7700 900077' }
         ],
         categories: defaultCategories,

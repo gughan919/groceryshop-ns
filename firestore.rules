@@ -31,6 +31,7 @@ service cloud.firestore {
       return isSignedIn() && (
         (request.auth.token.email != null && request.auth.token.email.lower() == 'admin@nammashop.com') ||
         (request.auth.token.email != null && request.auth.token.email.lower() == 'mjjayan2007@gmail.com') ||
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'gughan4912@gmail.com') ||
         (request.auth.token.email != null && request.auth.token.email.lower().endsWith('@nammashop.com')) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
