@@ -8,9 +8,10 @@ import { createRequire } from 'module';
 import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
 import { dbService, saveDb } from './server/db';
-import { getFirebaseServerDb, uploadFileToFirebaseStorage } from './server/firebase-server';
+import { getFirebaseServerDb, uploadFileToFirebaseStorage, syncDocToFirestore } from './server/firebase-server';
 import { GoogleGenAI, Type } from '@google/genai';
-import { User, Address, Product, Category, Order, Coupon, DashboardBanner, Review } from './src/types';
+import { User, Address, Product, Category, Order, Coupon, DashboardBanner, Review, CustomerLocation, DeliveryPartner, DeliveryStage, DeliveryTracking, TrafficLevel } from './src/types';
+import { WAREHOUSE_LOCATION, buildTimeline, calculateEtaMinutes, calculateHeading, decodePolyline, estimateTraffic, evaluateCodEligibility, fallbackCoordinatesForAddress, findClosestRoutePointIndex, haversineDistanceKm, STAGE_TO_ORDER_STATUS } from './src/utils/logistics';
 import Stripe from 'stripe';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 
@@ -233,10 +234,231 @@ async function generateAndAttachInvoice(order: Order, publicBaseUrl = process.en
 }
 
 const ADMIN_EMAILS = new Set(['admin@nammashop.com', 'mjjayan2007@gmail.com', 'nammashopuk@gmail.com']);
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyDbEt9Pv4TenLt7LD3tS0pXdAQsYo7_DJs';
+
+const DEFAULT_DRIVER: DeliveryPartner = {
+  id: 'driver-namma-rapid-01',
+  name: 'Shiva Shankar',
+  phone: '+919876543210',
+  profilePhoto: 'https://api.dicebear.com/7.x/personas/svg?seed=NammaRapidRider',
+  vehicleType: 'scooter',
+  vehicleNumber: 'KA-03-HL-1090',
+  rating: 4.8,
+  liveLatitude: WAREHOUSE_LOCATION.latitude,
+  liveLongitude: WAREHOUSE_LOCATION.longitude,
+  availability: 'available',
+  activeOrders: [],
+  earningsToday: 0,
+  completedOrders: 0
+};
 
 function isAdminEmail(email?: string) {
   const cleaned = email?.toLowerCase().trim();
   return !!cleaned && (ADMIN_EMAILS.has(cleaned) || cleaned.endsWith('@nammashop.com'));
+}
+
+function createDeliveryOtp() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function hashOtp(orderId: string, otp: string) {
+  return crypto.createHash('sha256').update(`${orderId}:${otp}:${process.env.OTP_PEPPER || 'namma-dev-pepper'}`).digest('hex');
+}
+
+function maskOtp(otp: string) {
+  return `${otp.slice(0, 1)}••${otp.slice(-1)}`;
+}
+
+async function geocodeAddress(address: Address): Promise<CustomerLocation> {
+  const fallback = fallbackCoordinatesForAddress(address);
+  if (!GOOGLE_MAPS_API_KEY) return fallback;
+  try {
+    const addressText = [
+      address.house,
+      address.street,
+      address.city,
+      address.state,
+      address.pincode,
+      address.country
+    ].filter(Boolean).join(', ');
+    const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(addressText)}&key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}`);
+    const payload: any = await response.json().catch(() => ({}));
+    const first = payload?.results?.[0];
+    const location = first?.geometry?.location;
+    if (!response.ok || !location) return fallback;
+    const components = Array.isArray(first.address_components) ? first.address_components : [];
+    const findComponent = (type: string) => components.find((entry: any) => entry.types?.includes(type))?.long_name || '';
+    return {
+      address: first.formatted_address || fallback.address,
+      latitude: Number(location.lat),
+      longitude: Number(location.lng),
+      pincode: findComponent('postal_code') || address.pincode,
+      locality: findComponent('sublocality') || findComponent('locality') || fallback.locality,
+      city: findComponent('locality') || address.city,
+      state: findComponent('administrative_area_level_1') || address.state
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+async function getDrivingRoutePolyline(origin: { latitude: number; longitude: number }, destination: { latitude: number; longitude: number }) {
+  try {
+    const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
+        'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.description,routes.legs.steps.navigationInstruction'
+      },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: origin.latitude, longitude: origin.longitude } } },
+        destination: { location: { latLng: { latitude: destination.latitude, longitude: destination.longitude } } },
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
+        computeAlternativeRoutes: true,
+        polylineQuality: 'HIGH_QUALITY',
+        polylineEncoding: 'ENCODED_POLYLINE'
+      })
+    });
+    const payload: any = await response.json().catch(() => ({}));
+    const route = payload?.routes?.[0];
+    const encoded = route?.polyline?.encodedPolyline;
+    if (response.ok && encoded) {
+      const durationSeconds = Number(String(route.duration || '0s').replace('s', '')) || 0;
+      const firstInstruction = route.legs?.[0]?.steps?.[0]?.navigationInstruction?.instructions || route.description || '';
+      return {
+        encodedPolyline: encoded as string,
+        points: decodePolyline(encoded as string),
+        distanceKm: Number(((route.distanceMeters || 0) / 1000).toFixed(2)),
+        etaMinutes: Math.max(1, Math.round(durationSeconds / 60)),
+        summary: route.description || 'Traffic-aware route',
+        currentRoad: firstInstruction
+      };
+    }
+  } catch {
+    // Fall through to the classic Directions API; the browser route renderer uses the same route family.
+  }
+
+  try {
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=driving&departure_time=now&traffic_model=best_guess&alternatives=true&key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}`
+    );
+    const payload: any = await response.json().catch(() => ({}));
+    const route = payload?.routes?.[0];
+    if (!response.ok || !route?.overview_polyline?.points) return null;
+    const leg = route.legs?.[0];
+    return {
+      encodedPolyline: route.overview_polyline.points as string,
+      points: decodePolyline(route.overview_polyline.points as string),
+      distanceKm: Number(((leg?.distance?.value || 0) / 1000).toFixed(2)),
+      etaMinutes: Math.max(1, Math.round((leg?.duration_in_traffic?.value || leg?.duration?.value || 0) / 60)),
+      summary: route.summary || '',
+      currentRoad: String(leg?.steps?.[0]?.html_instructions || route.summary || '').replace(/<[^>]+>/g, '')
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function buildTrackingForOrder(order: Order, options: { customerLocation: CustomerLocation; otp?: string; stage?: DeliveryStage; driver?: DeliveryPartner; deliverySlot?: string; origin?: { latitude: number; longitude: number } }): Promise<DeliveryTracking> {
+  const origin = options.origin || WAREHOUSE_LOCATION;
+  const route = await getDrivingRoutePolyline(origin, options.customerLocation);
+  const distanceKm = route?.distanceKm || haversineDistanceKm(WAREHOUSE_LOCATION, options.customerLocation);
+  const traffic = estimateTraffic(distanceKm);
+  const etaMinutes = route?.etaMinutes || calculateEtaMinutes({
+    distanceKm,
+    traffic,
+    itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
+    deliverySlot: options.deliverySlot,
+    driverAvailable: true
+  });
+  const stage = options.stage || (order.status === 'Delivered' ? 'Delivered' : order.status === 'Out for delivery' ? 'On the Way' : 'Order Placed');
+  const driverProgress: Record<DeliveryStage, number> = {
+    'Order Placed': 0.02,
+    Accepted: 0.04,
+    Preparing: 0.05,
+    'Ready for Pickup': 0.08,
+    'Picked Up': 0.18,
+    'On the Way': 0.58,
+    'Arriving Soon': 0.88,
+    Delivered: 1,
+    Cancelled: 0
+  };
+  const progress = driverProgress[stage] ?? 0.05;
+  const driver = {
+    ...(options.driver || DEFAULT_DRIVER),
+    liveLatitude: Number((WAREHOUSE_LOCATION.latitude + (options.customerLocation.latitude - WAREHOUSE_LOCATION.latitude) * progress).toFixed(6)),
+    liveLongitude: Number((WAREHOUSE_LOCATION.longitude + (options.customerLocation.longitude - WAREHOUSE_LOCATION.longitude) * progress).toFixed(6)),
+    activeOrders: Array.from(new Set([...(options.driver?.activeOrders || DEFAULT_DRIVER.activeOrders), order.id]))
+  };
+  const delayed = traffic === 'heavy' || traffic === 'severe';
+  return {
+    id: order.id,
+    orderId: order.id,
+    userId: order.userId,
+    driverId: driver.id,
+    warehouse: WAREHOUSE_LOCATION,
+    customerLocation: options.customerLocation,
+    driver,
+    status: stage,
+    etaMinutes,
+    etaText: stage === 'Delivered' ? 'Delivered' : `Arriving in ${etaMinutes} mins`,
+    distanceKm: Number(distanceKm.toFixed(2)),
+    remainingDistanceKm: Number(Math.max(0, distanceKm * (1 - progress)).toFixed(2)),
+    traffic,
+    deliveryZone: options.customerLocation.locality || options.customerLocation.city || WAREHOUSE_LOCATION.zone,
+    routeSummary: `${WAREHOUSE_LOCATION.zone} to ${options.customerLocation.locality || options.customerLocation.city}`,
+    routePolyline: route?.encodedPolyline,
+    delayed,
+    delayReason: delayed ? 'Your order is slightly delayed due to traffic.' : undefined,
+    deliveryOtpRequired: true,
+    deliveryOtpVerified: false,
+    deliveryOtpMasked: options.otp ? maskOtp(options.otp) : undefined,
+    updatedAt: new Date().toISOString(),
+    timeline: buildTimeline(order.createdAt, stage, distanceKm, traffic, options.customerLocation.locality || options.customerLocation.city || WAREHOUSE_LOCATION.zone)
+  };
+}
+
+async function syncLogisticsDocuments(order: Order, tracking: DeliveryTracking) {
+  await Promise.all([
+    syncDocToFirestore('tracking', order.id, tracking),
+    syncDocToFirestore('deliveries', order.id, tracking),
+    syncDocToFirestore('drivers', tracking.driver?.id || DEFAULT_DRIVER.id, tracking.driver || DEFAULT_DRIVER),
+    syncDocToFirestore('liveTracking', order.id, {
+      orderId: order.id,
+      driverId: tracking.driver?.id || DEFAULT_DRIVER.id,
+      latitude: tracking.driver?.liveLatitude || WAREHOUSE_LOCATION.latitude,
+      longitude: tracking.driver?.liveLongitude || WAREHOUSE_LOCATION.longitude,
+      heading: calculateHeading(
+        { latitude: tracking.driver?.liveLatitude || WAREHOUSE_LOCATION.latitude, longitude: tracking.driver?.liveLongitude || WAREHOUSE_LOCATION.longitude },
+        tracking.customerLocation
+      ),
+      speed: 18,
+      timestamp: new Date().toISOString(),
+      source: 'tracking-sync'
+    }),
+    syncDocToFirestore('analytics', `delivery-${order.id}`, {
+      orderId: order.id,
+      userId: order.userId,
+      deliveryTimeEta: tracking.etaMinutes,
+      distanceKm: tracking.distanceKm,
+      traffic: tracking.traffic,
+      cod: order.paymentMethod === 'COD',
+      codAllowed: order.codEligibility?.allowed ?? null,
+      status: tracking.status,
+      revenue: order.total,
+      updatedAt: new Date().toISOString()
+    }),
+    syncDocToFirestore('notifications', `${order.id}-${tracking.status.replace(/\s+/g, '-').toLowerCase()}`, {
+      orderId: order.id,
+      userId: order.userId,
+      title: `Order ${tracking.status}`,
+      body: tracking.delayed ? tracking.delayReason : tracking.etaText,
+      read: false,
+      createdAt: new Date().toISOString()
+    })
+  ]);
 }
 
 type VerifiedFirebaseUser = {
@@ -729,7 +951,27 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Checkout total must be greater than zero for a non-empty cart.' });
     }
 
+    const customerLocation = await geocodeAddress(normalizedAddress);
+    const deliveryDistanceKm = haversineDistanceKm(WAREHOUSE_LOCATION, customerLocation);
+    const userOrders = dbService.getOrders().filter(o => o.userId === user.id);
+    const repeatedCancellations = userOrders.filter(o => o.status === 'Cancelled').length;
+    const codEligibility = evaluateCodEligibility({
+      total: total * 100,
+      distanceKm: deliveryDistanceKm,
+      pincode: normalizedAddress.pincode,
+      repeatedCancellations,
+      suspicious: userOrders.length >= 3 && repeatedCancellations / Math.max(1, userOrders.length) > 0.5,
+      phoneVerified: Boolean(user.phoneVerified || normalizedAddress.phone)
+    });
+    if (paymentMethod === 'COD' && !codEligibility.allowed) {
+      return res.status(400).json({
+        error: `Cash on Delivery unavailable: ${codEligibility.reasons.join(' ')}`,
+        codEligibility
+      });
+    }
+
     const orderId = 'ORD-' + Math.floor(10000 + Math.random() * 90000).toString();
+    const deliveryOtp = createDeliveryOtp();
     const newOrder: Order = {
       id: orderId,
       userId: user.id,
@@ -747,10 +989,18 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
       paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Paid',
       address: normalizedAddress,
       createdAt: new Date().toISOString(),
+      warehouse: WAREHOUSE_LOCATION,
+      customerLocation,
+      codEligibility,
+      deliveryOtpHash: hashOtp(orderId, deliveryOtp),
+      deliveryOtpVerified: false,
+      cancellationStatus: 'none',
+      deliveryInstructions: String(req.body.deliveryInstructions || '').slice(0, 300),
       timeline: [
-        { status: 'Pending', time: new Date().toISOString(), description: 'Groceries order authorized. Nammashop team preparing dispatch.' }
+        { status: 'Pending', time: new Date().toISOString(), description: 'Groceries order authorized. Nammashop team preparing dispatch.', distance: Number(deliveryDistanceKm.toFixed(2)), traffic: estimateTraffic(deliveryDistanceKm), deliveryZone: customerLocation.locality || customerLocation.city }
       ]
     };
+    newOrder.delivery = await buildTrackingForOrder(newOrder, { customerLocation, otp: deliveryOtp, deliverySlot: selectedDeliverySlot });
 
     if (paymentMethod === 'Stripe') {
       const stripeInstance = getStripe();
@@ -806,6 +1056,7 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
           // Order starts as Pending until confirmation, saved securely & persistently
           newOrder.paymentStatus = 'Pending';
           dbService.createOrder(newOrder);
+          if (newOrder.delivery) await syncLogisticsDocuments(newOrder, newOrder.delivery);
           PENDING_STRIPE_ORDERS[orderId] = newOrder;
 
           return res.json({
@@ -823,6 +1074,7 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
         // Fallback for demo when Stripe key is not configured yet
         newOrder.paymentStatus = 'Paid';
         const committedOrder = dbService.createOrder(newOrder);
+        if (committedOrder.delivery) await syncLogisticsDocuments(committedOrder, committedOrder.delivery);
         const invoicedOrder = await generateAndAttachInvoice(committedOrder, (clientOrigin || process.env.APP_URL || req.headers.origin || `http://localhost:${PORT}`) as string);
         return res.json({
           success: true,
@@ -853,6 +1105,7 @@ app.post('/api/orders', authenticate, async (req: Request, res: Response) => {
 
     // Safe transaction: checking levels and reducing stock atomically
     const committedOrder = dbService.createOrder(newOrder);
+    if (committedOrder.delivery) await syncLogisticsDocuments(committedOrder, committedOrder.delivery);
     const responseOrder = committedOrder.paymentStatus === 'Paid'
       ? await generateAndAttachInvoice(committedOrder, (clientOrigin || process.env.APP_URL || req.headers.origin || `http://localhost:${PORT}`) as string)
       : committedOrder;
@@ -915,6 +1168,7 @@ app.post('/api/orders/confirm-stripe', authenticate, async (req: Request, res: R
     if (existing) {
       if (existing.paymentStatus !== 'Paid') {
         const updated = dbService.updateOrderPaymentStatus(orderId, 'Paid', 'Pending');
+        if ((updated || existing).delivery) await syncLogisticsDocuments(updated || existing, (updated || existing).delivery!);
         if (pendingOrder) {
           delete PENDING_STRIPE_ORDERS[orderId];
         }
@@ -944,6 +1198,7 @@ app.post('/api/orders/confirm-stripe', authenticate, async (req: Request, res: R
 
     // Commit to persistent DB and decrement active stock atomically
     const committedOrder = dbService.createOrder(pendingOrder);
+    if (committedOrder.delivery) await syncLogisticsDocuments(committedOrder, committedOrder.delivery);
     const invoicedOrder = await generateAndAttachInvoice(committedOrder);
 
     // Free memory
@@ -979,6 +1234,7 @@ app.post('/api/orders/confirm-razorpay', authenticate, async (req: Request, res:
     pendingOrder.paymentStatus = 'Paid';
     pendingOrder.status = 'Pending';
     const committedOrder = dbService.createOrder(pendingOrder);
+    if (committedOrder.delivery) await syncLogisticsDocuments(committedOrder, committedOrder.delivery);
     const invoicedOrder = await generateAndAttachInvoice(committedOrder, `${req.protocol}://${req.get('host')}`);
     delete PENDING_RAZORPAY_ORDERS[razorpay_order_id];
 
@@ -1371,14 +1627,186 @@ app.delete('/api/admin/banners/:id', requireAdmin, (req: Request, res: Response)
 });
 
 // Admin update live dispatcher timelines
-app.put('/api/admin/orders/:id/status', requireAdmin, (req: Request, res: Response) => {
+app.put('/api/admin/orders/:id/status', requireAdmin, async (req: Request, res: Response) => {
   const { status, description } = req.body;
   if (!status) return res.status(400).json({ error: 'Status string has not been passed.' });
 
   const updatedOrder = dbService.updateOrderStatus(req.params.id, status, description);
   if (!updatedOrder) return res.status(404).json({ error: 'Order not found in state tracker.' });
+  if (updatedOrder.delivery) {
+    const stage: DeliveryStage =
+      status === 'Packed' ? 'Preparing' :
+      status === 'Shipped' ? 'Picked Up' :
+      status === 'Out for delivery' ? 'On the Way' :
+      status === 'Delivered' ? 'Delivered' :
+      status === 'Cancelled' ? 'Cancelled' :
+      updatedOrder.delivery.status;
+    updatedOrder.delivery = await buildTrackingForOrder(updatedOrder, {
+      customerLocation: updatedOrder.customerLocation || updatedOrder.delivery.customerLocation,
+      stage,
+      driver: updatedOrder.delivery.driver,
+      deliverySlot: 'express'
+    });
+    updatedOrder.delivery.deliveryOtpVerified = Boolean(updatedOrder.deliveryOtpVerified);
+    await syncLogisticsDocuments(updatedOrder, updatedOrder.delivery);
+    await syncDocToFirestore('orders', updatedOrder.id, updatedOrder);
+  }
 
   res.json({ success: true, order: updatedOrder });
+});
+
+app.post('/api/admin/logistics/orders/:id/stage', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const stage = req.body.stage as DeliveryStage;
+    if (!stage || !(stage in STAGE_TO_ORDER_STATUS)) {
+      return res.status(400).json({ error: 'Valid logistics stage is required.' });
+    }
+    const updatedOrder = dbService.updateOrderStatus(req.params.id, STAGE_TO_ORDER_STATUS[stage], `Logistics stage updated: ${stage}`);
+    if (!updatedOrder) return res.status(404).json({ error: 'Order not found.' });
+    updatedOrder.delivery = await buildTrackingForOrder(updatedOrder, {
+      customerLocation: updatedOrder.customerLocation || fallbackCoordinatesForAddress(updatedOrder.address),
+      stage,
+      driver: updatedOrder.delivery?.driver,
+      deliverySlot: 'express'
+    });
+    await syncLogisticsDocuments(updatedOrder, updatedOrder.delivery);
+    await syncDocToFirestore('orders', updatedOrder.id, updatedOrder);
+    res.json({ success: true, order: updatedOrder });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Unable to update logistics stage.' });
+  }
+});
+
+app.post('/api/delivery/orders/:id/accept', authenticate, async (req: Request, res: Response) => {
+  const user = (req as any).user as User;
+  if (user.role !== 'delivery_partner' && user.role !== 'admin' && !isAdminEmail(user.email)) {
+    return res.status(403).json({ error: 'Delivery partner clearance required.' });
+  }
+  const order = dbService.getOrders().find(o => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const driver: DeliveryPartner = {
+    ...DEFAULT_DRIVER,
+    id: user.id,
+    name: user.name || DEFAULT_DRIVER.name,
+    phone: user.phone || DEFAULT_DRIVER.phone,
+    profilePhoto: user.avatar || DEFAULT_DRIVER.profilePhoto,
+    availability: 'busy',
+    activeOrders: Array.from(new Set([...(order.delivery?.driver?.activeOrders || []), order.id]))
+  };
+  order.driverId = driver.id;
+  order.delivery = await buildTrackingForOrder(order, {
+    customerLocation: order.customerLocation || fallbackCoordinatesForAddress(order.address),
+    stage: 'Accepted',
+    driver,
+    deliverySlot: 'express'
+  });
+  await syncLogisticsDocuments(order, order.delivery);
+  await syncDocToFirestore('orders', order.id, order);
+  saveDb();
+  res.json({ success: true, message: 'Delivery accepted.', order });
+});
+
+app.post('/api/delivery/orders/:id/location', authenticate, async (req: Request, res: Response) => {
+  const user = (req as any).user as User;
+  if (user.role !== 'delivery_partner' && user.role !== 'admin' && !isAdminEmail(user.email)) {
+    return res.status(403).json({ error: 'Delivery partner clearance required.' });
+  }
+  const order = dbService.getOrders().find(o => o.id === req.params.id);
+  if (!order?.delivery) return res.status(404).json({ error: 'Delivery tracking not found.' });
+  const latitude = Number(req.body.latitude);
+  const longitude = Number(req.body.longitude);
+  const incomingHeading = Number(req.body.heading);
+  const incomingSpeed = Number(req.body.speed);
+  const accuracy = Number(req.body.accuracy);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required.' });
+  }
+  const remaining = haversineDistanceKm({ latitude, longitude }, order.delivery.customerLocation);
+  const stage: DeliveryStage = remaining < 0.7 ? 'Arriving Soon' : 'On the Way';
+  const routePoints = order.delivery.routePolyline ? decodePolyline(order.delivery.routePolyline) : [];
+  const closestIndex = routePoints.length ? findClosestRoutePointIndex(routePoints, { latitude, longitude }) : 0;
+  const deviationKm = routePoints.length ? haversineDistanceKm(routePoints[closestIndex], { latitude, longitude }) : 0;
+  if (deviationKm > 0.25) {
+    order.delivery = await buildTrackingForOrder(order, {
+      customerLocation: order.customerLocation || order.delivery.customerLocation,
+      stage,
+      driver: order.delivery.driver,
+      origin: { latitude, longitude }
+    });
+  }
+  const nextRoutePoint = routePoints[Math.min(routePoints.length - 1, closestIndex + 1)] || order.delivery.customerLocation;
+  const resolvedHeading = Number.isFinite(incomingHeading)
+    ? incomingHeading
+    : calculateHeading({ latitude, longitude }, nextRoutePoint);
+  order.delivery.driver = {
+    ...(order.delivery.driver || DEFAULT_DRIVER),
+    id: user.id,
+    liveLatitude: latitude,
+    liveLongitude: longitude,
+    availability: 'busy',
+    activeOrders: Array.from(new Set([...(order.delivery.driver?.activeOrders || []), order.id]))
+  };
+  order.delivery.status = stage;
+  order.delivery.remainingDistanceKm = Number(remaining.toFixed(2));
+  order.delivery.etaMinutes = Math.max(2, Math.round((remaining / Math.max(8, Number.isFinite(incomingSpeed) && incomingSpeed > 0 ? incomingSpeed : 22)) * 60));
+  order.delivery.etaText = `Arriving in ${order.delivery.etaMinutes} mins`;
+  order.delivery.updatedAt = new Date().toISOString();
+  order.status = STAGE_TO_ORDER_STATUS[stage];
+  await syncDocToFirestore('liveTracking', order.id, {
+    orderId: order.id,
+    driverId: user.id,
+    latitude,
+    longitude,
+    heading: resolvedHeading,
+    speed: Number.isFinite(incomingSpeed) ? incomingSpeed : 18,
+    accuracy: Number.isFinite(accuracy) ? accuracy : null,
+    timestamp: new Date().toISOString(),
+    source: 'delivery-partner-gps',
+    routeDeviationKm: Number(deviationKm.toFixed(3))
+  });
+  await syncLogisticsDocuments(order, order.delivery);
+  await syncDocToFirestore('liveTracking', order.id, {
+    orderId: order.id,
+    driverId: user.id,
+    latitude,
+    longitude,
+    heading: resolvedHeading,
+    speed: Number.isFinite(incomingSpeed) ? incomingSpeed : 18,
+    accuracy: Number.isFinite(accuracy) ? accuracy : null,
+    timestamp: new Date().toISOString(),
+    source: 'delivery-partner-gps',
+    routeDeviationKm: Number(deviationKm.toFixed(3))
+  });
+  await syncDocToFirestore('orders', order.id, order);
+  saveDb();
+  res.json({ success: true, message: 'Live GPS updated.', order });
+});
+
+app.post('/api/delivery/orders/:id/verify-otp', authenticate, async (req: Request, res: Response) => {
+  const user = (req as any).user as User;
+  if (user.role !== 'delivery_partner' && user.role !== 'admin' && !isAdminEmail(user.email)) {
+    return res.status(403).json({ error: 'Delivery partner clearance required.' });
+  }
+  const order = dbService.getOrders().find(o => o.id === req.params.id);
+  if (!order?.deliveryOtpHash) return res.status(404).json({ error: 'Delivery OTP not found.' });
+  if (hashOtp(order.id, String(req.body.otp || '')) !== order.deliveryOtpHash) {
+    return res.status(400).json({ error: 'Invalid delivery OTP.' });
+  }
+  const updatedOrder = dbService.updateOrderStatus(order.id, 'Delivered', 'Delivery OTP verified. Groceries delivered successfully.');
+  if (!updatedOrder) return res.status(404).json({ error: 'Order not found.' });
+  updatedOrder.deliveryOtpVerified = true;
+  updatedOrder.paymentStatus = updatedOrder.paymentMethod === 'COD' ? 'Paid' : updatedOrder.paymentStatus;
+  updatedOrder.delivery = await buildTrackingForOrder(updatedOrder, {
+    customerLocation: updatedOrder.customerLocation || fallbackCoordinatesForAddress(updatedOrder.address),
+    stage: 'Delivered',
+    driver: updatedOrder.delivery?.driver,
+    deliverySlot: 'express'
+  });
+  updatedOrder.delivery.deliveryOtpVerified = true;
+  await syncLogisticsDocuments(updatedOrder, updatedOrder.delivery);
+  await syncDocToFirestore('orders', updatedOrder.id, updatedOrder);
+  saveDb();
+  res.json({ success: true, message: 'OTP verified. Order delivered.', order: updatedOrder });
 });
 
 

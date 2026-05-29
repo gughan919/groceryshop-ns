@@ -69,7 +69,7 @@ service cloud.firestore {
                data.id is string && data.id.size() <= 128 &&
                data.email is string && data.email.size() <= 200 &&
                data.name is string && data.name.size() <= 100 &&
-               data.role in ['admin', 'customer'] &&
+               data.role in ['admin', 'customer', 'delivery_partner', 'store_staff'] &&
                (data.phone == null || (data.phone is string && data.phone.size() <= 20)) &&
                (data.avatar == null || (data.avatar is string && data.avatar.size() <= 1024)) &&
                (data.isBanned == null || data.isBanned is bool) &&
@@ -196,6 +196,59 @@ service cloud.firestore {
                data.createdAt is string &&
                data.timeline is list;
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // COLLECTIONS: realtime logistics, drivers, messages, notifications, analytics
+    // -------------------------------------------------------------------------
+    function isDeliveryPartner() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'delivery_partner';
+    }
+
+    function isStoreStaff() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'store_staff';
+    }
+
+    match /tracking/{orderId} {
+      allow read: if isAdmin() || isDeliveryPartner() || isStoreStaff() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create, update, delete: if isAdmin() || isDeliveryPartner() || isStoreStaff();
+    }
+
+    match /deliveries/{deliveryId} {
+      allow read: if isAdmin() || isDeliveryPartner() || isStoreStaff() ||
+        (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create, update, delete: if isAdmin() || isDeliveryPartner() || isStoreStaff();
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isAdmin() || isDeliveryPartner() || isStoreStaff() || isSignedIn();
+      allow create, update: if isAdmin() || (isDeliveryPartner() && request.auth.uid == driverId);
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isAdmin() || isDeliveryPartner() || isStoreStaff();
+      allow update: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    match /messages/{orderId}/items/{messageId} {
+      allow read: if isAdmin() || isDeliveryPartner() || isStoreStaff() ||
+        (isSignedIn() && exists(/databases/$(database)/documents/orders/$(orderId)) &&
+         get(/databases/$(database)/documents/orders/$(orderId)).data.userId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.text is string && request.resource.data.text.size() <= 800;
+      allow update, delete: if isAdmin();
+    }
+
+    match /analytics/{analyticsId} {
+      allow read: if isAdmin() || isStoreStaff();
+      allow create, update, delete: if isAdmin();
     }
 
     // -------------------------------------------------------------------------

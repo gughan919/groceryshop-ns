@@ -38,6 +38,7 @@ import { RecaptchaVerifier, sendEmailVerification, signInWithPhoneNumber, update
 import type { ConfirmationResult } from 'firebase/auth';
 import { generateAndUploadInvoice } from '../utils/invoice';
 import { collection, doc, setDoc, deleteDoc, getDocs, updateDoc } from 'firebase/firestore';
+import LiveOrderTracking from './LiveOrderTracking';
 
 interface CustomerProfileDashboardProps {
   currentUser: User | null;
@@ -1385,59 +1386,12 @@ export default function CustomerProfileDashboard({
               ) : (
                 <div className="space-y-6">
                   
-                  {/* Package Delivery Status Hero */}
-                  <div className="bg-gradient-to-tr from-emerald-600 to-emerald-700 text-white rounded-2xl p-6 shadow-3xs space-y-4">
-                    <div className="flex justify-between items-start">
-                      <div className="space-y-1">
-                        <span className="text-[10px] bg-white/15 px-2.5 py-0.5 rounded-full uppercase font-mono font-bold">10-Min Rapid Delivery Slot</span>
-                        <h3 className="text-xl font-black tracking-tight mt-1">
-                          {activeTrackingOrder.status === 'Delivered' ? 'Completed Package Delivery' : 'Arriving in 8-10 Minutes'}
-                        </h3>
-                      </div>
-                      <Truck size={36} className="text-emerald-200 opacity-90 animate-bounce" />
-                    </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 pt-2 text-xs border-t border-white/10">
-                      <div>
-                        <span className="text-emerald-200 text-[10px] font-bold block">Delivery Executive name</span>
-                        <span className="font-extrabold">Shiva Shankar</span>
-                      </div>
-                      <div>
-                        <span className="text-emerald-200 text-[10px] font-bold block">Secure Dispatch Gate OTP</span>
-                        <span className="font-mono font-black text-sm text-yellow-300 tracking-wider">3948</span>
-                      </div>
-                      <div>
-                        <span className="text-emerald-200 text-[10px] font-bold block">Vehicle Coordinates</span>
-                        <span className="font-bold">Electric Scooter KA-03-HL-1090</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* High Quality Animated Timeline Vertical Chain */}
-                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 space-y-4">
-                    <h4 className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Live Delivery Milestones Logs</h4>
-                    
-                    <div className="relative pl-6 border-l-2 border-emerald-500 space-y-6">
-                      {activeTrackingOrder.timeline.map((st, idx) => (
-                        <div key={idx} className="relative text-xs leading-loose animate-in slide-in-from-left-2 duration-200 delay-100">
-                          <div className="absolute -left-[31px] top-1 bg-emerald-600 text-slate-50 h-4.5 w-4.5 rounded-full shrink-0 flex items-center justify-center border-2 border-white ring-2 ring-emerald-500/25">
-                            <Check size={10} className="stroke-[3]" />
-                          </div>
-                          <div>
-                            <span className="font-black text-slate-800 text-xs tracking-tight">{st.status}</span>
-                            <span className="text-[10px] font-mono text-slate-400 font-bold ml-2.5">{new Date(st.time).toLocaleTimeString()}</span>
-                            <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">{st.description}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Safety Assurance Footnote */}
-                  <div className="flex gap-2 p-3.5 bg-yellow-50/60 border border-yellow-100 text-yellow-800 rounded-xl text-[11px] leading-relaxed">
-                    <Shield size={16} className="text-yellow-600 shrink-0 mt-0.5" />
-                    <span>Always ensure contactless OTP delivery confirmations on standard parcel lock gates. For safety concerns, flag packages directly to our support.</span>
-                  </div>
+                  <LiveOrderTracking
+                    order={activeTrackingOrder}
+                    currentUser={currentUser}
+                    token={token}
+                    notifyUser={notifyUser}
+                  />
 
                 </div>
               )}

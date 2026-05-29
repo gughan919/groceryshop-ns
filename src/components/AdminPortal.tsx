@@ -16,11 +16,13 @@ import {
   Ban,
   CheckCircle2,
   Save,
-  X
+  X,
+  Truck
 } from 'lucide-react';
 import { Product, Category, Order, Coupon, DashboardBanner, User } from '../types';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
+import AdminLogisticsPanel from './AdminLogisticsPanel';
 
 interface AdminPortalProps {
   onNotify: (message: string, type: 'success' | 'error') => void;
@@ -41,7 +43,7 @@ export default function AdminPortal({
   banners,
   onRefreshAllData
 }: AdminPortalProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'categories' | 'orders' | 'coupons' | 'banners' | 'users'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'categories' | 'orders' | 'logistics' | 'coupons' | 'banners' | 'users'>('dashboard');
   const [analytics, setAnalytics] = useState<any>(null);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
   const token = localStorage.getItem('nammashop_token') || '';
@@ -526,6 +528,19 @@ export default function AdminPortal({
           {orders.filter(o => o.status === 'Pending').length > 0 && (
             <span className="ml-auto bg-amber-500 text-[10px] text-white font-bold h-4 w-4 rounded-full flex items-center justify-center">
               {orders.filter(o => o.status === 'Pending').length}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('logistics')}
+          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium cursor-pointer transition-all ${activeTab === 'logistics' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+        >
+          <Truck size={15} />
+          <span>Logistics Live</span>
+          {orders.filter(o => o.status === 'Out for delivery').length > 0 && (
+            <span className="ml-auto bg-red-500 text-[10px] text-white font-bold h-4 min-w-4 rounded-full flex items-center justify-center px-1">
+              {orders.filter(o => o.status === 'Out for delivery').length}
             </span>
           )}
         </button>
@@ -1198,6 +1213,16 @@ export default function AdminPortal({
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'logistics' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            <div>
+              <h3 className="text-gray-900 font-bold text-base tracking-tight">Realtime Logistics Control Tower</h3>
+              <p className="text-xs text-gray-500">Monitor routes, riders, COD risk, delay alerts, and live customer tracking documents.</p>
+            </div>
+            <AdminLogisticsPanel orders={orders} token={token} onNotify={onNotify} />
           </div>
         )}
 

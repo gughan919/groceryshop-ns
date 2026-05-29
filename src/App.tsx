@@ -42,11 +42,14 @@ import {
   BadgePercent
 } from 'lucide-react';
 import { Product, Category, Order, Coupon, DashboardBanner, User, Address, Review } from './types';
+import { evaluateCodEligibility, fallbackCoordinatesForAddress, haversineDistanceKm, WAREHOUSE_LOCATION } from './utils/logistics';
 import AICompanion from './components/AICompanion';
 import AIPage from './components/AIPage';
 import AdminPortal from './components/AdminPortal';
 import CustomerProfileDashboard from './components/CustomerProfileDashboard';
 import OrderSuccessView from './components/OrderSuccessView';
+import DeliveryPartnerDashboard from './components/DeliveryPartnerDashboard';
+import LiveOrderTracking from './components/LiveOrderTracking';
 import { auth as firebaseAuth, db as firestoreDb } from './firebase';
 import {
   signInWithEmailAndPassword,
@@ -317,10 +320,10 @@ export default function App() {
   const [activeCampaignBannerId, setActiveCampaignBannerId] = useState<string | null>(null);
   const [discountPage, setDiscountPage] = useState(1);
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<'catalog' | 'checkout' | 'profile' | 'admin' | 'ai' | 'success' | 'sponsored'>(() => {
+  const [viewMode, setViewMode] = useState<'catalog' | 'checkout' | 'profile' | 'admin' | 'delivery' | 'tracking' | 'ai' | 'success' | 'sponsored'>(() => {
     try {
       const saved = localStorage.getItem('nammashop_viewMode');
-      if (saved === 'success' || saved === 'checkout' || saved === 'profile' || saved === 'ai' || saved === 'admin' || saved === 'sponsored') {
+      if (saved === 'success' || saved === 'checkout' || saved === 'profile' || saved === 'ai' || saved === 'admin' || saved === 'delivery' || saved === 'tracking' || saved === 'sponsored') {
         return saved as any;
       }
     } catch {}
@@ -586,6 +589,8 @@ export default function App() {
       checkout: 'Secure checkout | NammaShop UK',
       profile: 'Your account | NammaShop UK',
       admin: 'Admin console | NammaShop',
+      delivery: 'Delivery partner | NammaShop',
+      tracking: 'Live order tracking | NammaShop UK',
       ai: 'AI kitchen assistant | NammaShop UK',
       success: 'Order confirmed | NammaShop UK',
       sponsored: 'Sponsored grocery campaign | NammaShop UK'
@@ -1780,6 +1785,17 @@ export default function App() {
   const finalDeliveryFee = cartSubtotal >= 20 || cartSubtotal === 0 ? 0 : deliveryFeeBySlot[deliverySlot];
   const computedTax = Number((cartSubtotal * 0.05).toFixed(2)); // 5% VAT on organic groceries
   const cartGrandTotal = Number(Math.max(0, cartSubtotal - activeCouponDiscount + finalDeliveryFee + computedTax).toFixed(2));
+  const selectedCheckoutAddress = addresses.find(a => a.id === selectedAddressId) || null;
+  const checkoutCustomerLocation = selectedCheckoutAddress ? fallbackCoordinatesForAddress(selectedCheckoutAddress) : null;
+  const checkoutDistanceKm = checkoutCustomerLocation ? haversineDistanceKm(WAREHOUSE_LOCATION, checkoutCustomerLocation) : 0;
+  const codPreview = evaluateCodEligibility({
+    total: cartGrandTotal * 100,
+    distanceKm: checkoutDistanceKm,
+    pincode: selectedCheckoutAddress?.pincode,
+    repeatedCancellations: orders.filter(order => order.status === 'Cancelled').length,
+    suspicious: false,
+    phoneVerified: Boolean(currentUser?.phoneVerified || selectedCheckoutAddress?.phone)
+  });
   const missingCartProductIds = normalizedCart
     .filter(item => !productById[item.productId])
     .map(item => item.productId);
@@ -1944,6 +1960,10 @@ export default function App() {
       notifyUser(countryMissing ? 'Please select country.' : `Please complete delivery address: ${missingAddressFields.join(', ')}.`, 'error');
       return;
     }
+    if (paymentMethod === 'COD' && !codPreview.allowed) {
+      notifyUser(`COD unavailable: ${codPreview.reasons.join(' ')}`, 'error');
+      return;
+    }
 
     let paymentWindow: Window | null = null;
     if (paymentMethod === 'Stripe') {
@@ -2018,7 +2038,7 @@ export default function App() {
       fetchCustomerData(token);
       fetchCatalogs();
       setActiveTrackingOrder(order);
-      setViewMode('success');
+      setViewMode('tracking');
     };
 
     setIsPendingCheckout(true);
@@ -2149,7 +2169,7 @@ export default function App() {
         fetchCustomerData(token);
         fetchCatalogs(); // Refresh stock reductions instantly
         setActiveTrackingOrder(data.order);
-        setViewMode('success');
+        setViewMode('tracking');
       } else {
         if (paymentWindow) {
           paymentWindow.close();
@@ -2316,12 +2336,23 @@ export default function App() {
         
         <div className="flex items-center gap-2">
           {isAdminUser(currentUser) ? (
+            <>
             <button
               onClick={() => setViewMode(viewMode === 'admin' ? 'catalog' : 'admin')}
               className="bg-[#ff2d2d] hover:bg-[#e12626] text-white px-2 py-0.5 rounded font-bold cursor-pointer transition-all"
             >
               {viewMode === 'admin' ? '💻 SWITCH TO CUSTOMER GATE' : '📊 LAUNCH SYSTEM ADMIN SUITE'}
             </button>
+            {(currentUser?.role === 'delivery_partner' || isAdminUser(currentUser)) && (
+              <button
+                onClick={() => setViewMode(viewMode === 'delivery' ? 'catalog' : 'delivery')}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all cursor-pointer text-slate-600 hover:bg-slate-50"
+              >
+                <Truck size={14} />
+                <span>{viewMode === 'delivery' ? 'Customer store' : 'Rider app'}</span>
+              </button>
+            )}
+            </>
           ) : (
             <span className="text-slate-400 italic">Test account admin login: admin@nammashop.com (admin123)</span>
           )}
@@ -2487,7 +2518,7 @@ export default function App() {
             {/* AI Assistant shortcut */}
             <button
               onClick={() => setViewMode('ai')}
-              className={`items-center gap-1.5 px-3 py-2 rounded-xl transition-all cursor-pointer ${viewMode === 'catalog' || viewMode === 'checkout' || viewMode === 'success' ? 'hidden' : 'flex'} ${viewMode === 'ai' ? 'text-[#ff2d2d] bg-red-50 font-bold font-sans' : 'text-slate-600 hover:bg-slate-50'}`}
+              className={`items-center gap-1.5 px-3 py-2 rounded-xl transition-all cursor-pointer ${viewMode === 'catalog' || viewMode === 'checkout' || viewMode === 'success' || viewMode === 'tracking' ? 'hidden' : 'flex'} ${viewMode === 'ai' ? 'text-[#ff2d2d] bg-red-50 font-bold font-sans' : 'text-slate-600 hover:bg-slate-50'}`}
             >
               <Sparkles size={14} className="text-[#ff2d2d]" />
               <span>AI Kitchen</span>
@@ -2606,6 +2637,54 @@ export default function App() {
                 Admin Login
               </button>
             )}
+          </div>
+        )}
+
+        {viewMode === 'delivery' && authInitialized && (currentUser?.role === 'delivery_partner' || isAdminUser(currentUser)) && (
+          <DeliveryPartnerDashboard
+            currentUser={currentUser}
+            token={token}
+            notifyUser={notifyUser}
+          />
+        )}
+
+        {viewMode === 'delivery' && authInitialized && !(currentUser?.role === 'delivery_partner' || isAdminUser(currentUser)) && (
+          <div className="bg-white border border-slate-100 rounded-2xl p-8 text-center shadow-sm">
+            <Lock className="mx-auto text-slate-400 mb-3" size={28} />
+            <h2 className="text-lg font-black text-slate-900">Delivery partner access required</h2>
+            <p className="text-sm text-slate-500 mt-1">This dashboard is restricted to delivery partners and admins.</p>
+          </div>
+        )}
+
+        {viewMode === 'tracking' && activeTrackingOrder && (
+          <div className="space-y-5 animate-in fade-in duration-200">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-[#ff2d2d]">Payment completed</p>
+                <h2 className="text-2xl font-black tracking-tight text-slate-950">Track order {activeTrackingOrder.id}</h2>
+                <p className="mt-1 text-xs text-slate-500">Your grocery delivery is now live with ETA, route, rider, chat, OTP and invoice tools.</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setViewMode('success')}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  Order receipt
+                </button>
+                <button
+                  onClick={() => setViewMode('catalog')}
+                  className="rounded-2xl bg-[#ff2d2d] px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-[#e12626]"
+                >
+                  Continue shopping
+                </button>
+              </div>
+            </div>
+            <LiveOrderTracking
+              order={activeTrackingOrder}
+              currentUser={currentUser}
+              token={token}
+              notifyUser={notifyUser}
+            />
           </div>
         )}
 
@@ -2845,15 +2924,19 @@ export default function App() {
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div
-                      onClick={() => setPaymentMethod('COD')}
+                      onClick={() => codPreview.allowed ? setPaymentMethod('COD') : notifyUser(`COD unavailable: ${codPreview.reasons.join(' ')}`, 'error')}
                       className={`p-4 rounded-2xl border transition-all cursor-pointer ${
                         paymentMethod === 'COD'
                           ? 'border-[#ff2d2d] bg-red-50/40 ring-1 ring-[#ff2d2d]'
-                          : 'border-slate-100 bg-white hover:bg-slate-50'
+                          : codPreview.allowed ? 'border-slate-100 bg-white hover:bg-slate-50' : 'border-slate-100 bg-slate-50 opacity-60'
                       }`}
                     >
                       <span className="font-bold text-xs text-gray-800 block">Cash on Delivery (COD)</span>
-                      <p className="text-[10px] text-gray-400 mt-1">Pay flat cash-back at your corridor doorway steps upon package delivery.</p>
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        {codPreview.allowed
+                          ? `OTP verified COD enabled within ${codPreview.distanceKm.toFixed(1)} km.`
+                          : codPreview.reasons[0] || 'Select an address to verify COD.'}
+                      </p>
                     </div>
 
                     <div
@@ -2881,6 +2964,11 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                {selectedCheckoutAddress && (
+                  <div className={`rounded-2xl border p-3 text-[11px] font-semibold ${codPreview.allowed ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
+                    COD policy check: {codPreview.allowed ? 'Eligible' : codPreview.reasons.join(' ')} Distance {codPreview.distanceKm.toFixed(1)} km, fraud score {codPreview.fraudScore}.
+                  </div>
+                )}
 
               </div>
 
@@ -2971,8 +3059,8 @@ export default function App() {
 
                 <button
                   onClick={checkoutCartAndPay}
-                  disabled={isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0}
-                  className={`w-full ${isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0 ? 'bg-slate-450 cursor-not-allowed opacity-80' : 'bg-[#ff2d2d] hover:bg-[#e12626] active:scale-95'} py-3 rounded-2xl text-white font-bold text-xs tracking-wider transition-all mt-4 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm`}
+                  disabled={isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0 || (paymentMethod === 'COD' && !codPreview.allowed)}
+                  className={`w-full ${isPendingCheckout || missingCartProductIds.length > 0 || normalizedCart.length === 0 || (paymentMethod === 'COD' && !codPreview.allowed) ? 'bg-slate-450 cursor-not-allowed opacity-80' : 'bg-[#ff2d2d] hover:bg-[#e12626] active:scale-95'} py-3 rounded-2xl text-white font-bold text-xs tracking-wider transition-all mt-4 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm`}
                 >
                   {isPendingCheckout ? (
                     <div className="h-3 w-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
@@ -3038,8 +3126,7 @@ export default function App() {
               setViewMode('catalog');
             }}
             onTrackOrder={() => {
-              setProfileSubTab('tracking');
-              setViewMode('profile');
+              setViewMode('tracking');
             }}
           />
         )}
